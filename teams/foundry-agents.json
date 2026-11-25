@@ -1,0 +1,16 @@
+{
+  "$schema": "../platform/team.schema.json",
+  "name": "foundry-agents",
+  "description": "Prompt agents in a Microsoft Foundry project that call the chat model through the project's gateway connection.",
+  "owner": "foundry-agents-leads",
+  "models": ["chat"],
+  "tools": [],
+  "members": [
+    {
+      "name": "project",
+      "principalId": "platform:foundry-project",
+      "principalType": "ServicePrincipal",
+      "dailyBudgetUsd": 5
+    }
+  ]
+}

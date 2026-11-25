@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "alias": "chat",
+      "description": "General-purpose chat model on Microsoft Foundry. OpenAI Chat Completions and Responses APIs."
+    }
+  ],
+  "tools": [
+    {
+      "server": "orders",
+      "description": "Look up orders and stock levels. Read-only, synthetic data, served from a private MCP server."
+    }
+  ]
+}

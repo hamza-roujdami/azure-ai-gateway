@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "team.schema.json",
+  "title": "Team access to Azure AI Gateway",
+  "description": "One file per team in teams/, named <name>.json. scripts/teams.py validates it against platform/catalog.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "owner", "members"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": {
+      "description": "Team name, the same as the file name without .json.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
+    },
+    "description": { "description": "What the team builds with the gateway.", "type": "string" },
+    "owner": {
+      "description": "Who approves changes to this team's access, for example a team alias.",
+      "type": "string",
+      "minLength": 1
+    },
+    "models": {
+      "description": "Model aliases from platform/catalog.json that the members can call.",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "tools": {
+      "description": "MCP servers from platform/catalog.json that the members can call.",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "members": {
+      "description": "Microsoft Entra principals that get the team's access.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/member" }
+    }
+  },
+  "$defs": {
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "principalId", "principalType"],
+      "properties": {
+        "name": {
+          "description": "Short name for the member within the team, for example developers or agent.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "principalId": {
+          "description": "Object ID of the user, group, or service principal (for a managed identity, its principal ID). platform:deployer, platform:apps, and platform:foundry-project refer to identities that this deployment creates or uses; the deployment sets their principal type.",
+          "type": "string",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|platform:(deployer|apps|foundry-project))$"
+        },
+        "principalType": { "enum": ["User", "Group", "ServicePrincipal"] },
+        "dailyBudgetUsd": {
+          "description": "Estimated model spend this identity may use per day, in US dollars. Each identity gets its own budget. Not allowed for groups.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "principalType": { "const": "Group" } } },
+          "then": { "not": { "required": ["dailyBudgetUsd"] } }
+        },
+        {
+          "if": {
+            "properties": { "principalId": { "enum": ["platform:apps", "platform:foundry-project"] } },
+            "required": ["principalId"]
+          },
+          "then": { "properties": { "principalType": { "const": "ServicePrincipal" } } }
+        }
+      ]
+    }
+  }
+}

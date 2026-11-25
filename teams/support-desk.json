@@ -1,0 +1,16 @@
+{
+  "$schema": "../platform/team.schema.json",
+  "name": "support-desk",
+  "description": "An AI app that summarizes support tickets. It needs the chat model, not the orders tools.",
+  "owner": "support-desk-leads",
+  "models": ["chat"],
+  "tools": [],
+  "members": [
+    {
+      "name": "developer",
+      "principalId": "platform:deployer",
+      "principalType": "User",
+      "dailyBudgetUsd": 2
+    }
+  ]
+}

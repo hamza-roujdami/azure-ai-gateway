@@ -1,0 +1,16 @@
+{
+  "$schema": "../platform/team.schema.json",
+  "name": "order-assistant",
+  "description": "An AI agent on Container Apps that answers order questions with the chat model and the orders tools.",
+  "owner": "order-assistant-leads",
+  "models": ["chat"],
+  "tools": ["orders"],
+  "members": [
+    {
+      "name": "agent",
+      "principalId": "platform:apps",
+      "principalType": "ServicePrincipal",
+      "dailyBudgetUsd": 5
+    }
+  ]
+}

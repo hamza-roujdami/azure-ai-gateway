@@ -1,0 +1,19 @@
+# Dev tooling only. Each component has its own requirements.txt for its container image.
+[project]
+name = "azure-ai-gateway"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["clients/aca-agent", "tools/mcp-server", "scripts"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["orders", "server", "gateway_agent", "app", "smoke", "teams", "check_gateway"]

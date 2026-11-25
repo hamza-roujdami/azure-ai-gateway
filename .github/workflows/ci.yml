@@ -1,0 +1,29 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check . && ruff format --check .
+      - run: pytest -q
+      - name: Team files
+        run: python scripts/teams.py validate
+      - name: Access that this pull request grants and revokes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python scripts/teams.py diff --base "origin/$BASE_REF" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Bicep
+        run: |
+          az bicep install
+          az bicep build -f infra/main.bicep --stdout > /dev/null
+          az bicep build -f infra/modules/telemetry.bicep --stdout > /dev/null
+          AI_GATEWAY_TEAMS="$(python scripts/teams.py render)" az bicep build-params -f infra/main.bicepparam --stdout > /dev/null
+      - run: for f in scripts/*.sh infra/scripts/*.sh; do bash -n "$f"; done
