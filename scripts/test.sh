@@ -7,6 +7,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 [[ -f .env ]] || { echo "Run ./scripts/deploy.sh first (it writes .env)." >&2; exit 1; }
 set -a; source .env; set +a
+if [[ -n "${AZURE_RELOGIN_SCRIPT:-}" ]]; then "$AZURE_RELOGIN_SCRIPT"; fi  # GitHub Actions: fresh OIDC sign-in
 PY="$(command -v python3)"
 # In the deploy pipeline the caller is a service principal, not the developer that the team files grant access to.
 AS_DEVELOPER=true

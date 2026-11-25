@@ -115,16 +115,15 @@ AZURE_ENV_NAME=aigw-whatif DEPLOY_APPS=true AI_GATEWAY_TEAMS="$(python scripts/t
 ```
 
 ## Status
-- Verified offline: Bicep build and lint, `build-params` with the rendered teams, 35 unit tests, a local MCP server
-  run. A read-only what-if succeeds (34 creates, 4 unsupported Container Apps DNS records); it can't expand the
-  gateway's child assets or the team role assignments, because they depend on values from the same deployment.
-- **Not yet deployed.** Unproven until a deployment:
-  - the gateway resolving the internal Container Apps DNS
-  - the MCP ingress IP restriction allowing the gateway subnet
-  - `publicNetworkAccess` on the gateway at creation
-  - the alias `costLimit` with claim overrides, and `teams.py prune` and `check_gateway.py` against a live gateway
-    (REST list paths taken from the `az aigateway` extension)
-  - the 403 for a token without Tools User on the MCP endpoint
+- **Deployed and tested live** (Sweden Central): `scripts/test.sh` passes every check: 401 without a token or with a
+  wrong audience; the developer allowed `chat` and `shipping`, denied `orders` and `returns` (403); Foundry and the
+  MCP server not reachable from the internet; the compliance check; the AI app, the order agent across all three MCP
+  servers, Copilot CLI on the gateway's model and shipping tools, and the Foundry prompt agent. Also proven live: the
+  `master` key answers 401 once suspended; `teams.py prune` removed a stray grant and the gateway answered 403 about a
+  minute later; `usage_report.py` shows denials, throttling and 5xx per team member; the deploy workflow signs in
+  with OIDC (new role assignments need a couple of minutes before the first sign-in finds the subscription).
+- A read-only what-if can't expand the gateway's child assets or the team role assignments, because they depend on
+  values from the same deployment.
 
 ## Working rules
 - Don't deploy without explicit approval; deployments cost money. Commit and push only when the user asks.

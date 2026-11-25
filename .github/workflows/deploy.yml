@@ -25,6 +25,11 @@ jobs:
       # platform:deployer in the team files is the developer, not this pipeline's identity
       AZURE_PRINCIPAL_ID: ${{ vars.DEVELOPER_PRINCIPAL_ID }}
       AZURE_PRINCIPAL_TYPE: ${{ vars.DEVELOPER_PRINCIPAL_TYPE }}
+      # The OIDC sign-in lasts a few minutes: the scripts sign in again with a fresh GitHub token before each phase
+      AZURE_RELOGIN_SCRIPT: ./scripts/ci-login.sh
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,11 +46,5 @@ jobs:
           rm install.sh
       - name: Deploy
         run: ./scripts/deploy.sh
-      # The first sign-in's GitHub token expires after a few minutes, and the tests need tokens for new audiences
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Test
         run: ./scripts/test.sh

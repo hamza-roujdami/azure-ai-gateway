@@ -19,6 +19,8 @@ export INBOUND_MODE="${INBOUND_MODE:-hybrid}"
 export GATEWAY_PRIVATE_ENDPOINT="${GATEWAY_PRIVATE_ENDPOINT:-false}"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
+# In GitHub Actions, sign in again before each phase: the OIDC sign-in only lasts a few minutes (scripts/ci-login.sh).
+relogin() { if [[ -n "${AZURE_RELOGIN_SCRIPT:-}" ]]; then "$AZURE_RELOGIN_SCRIPT"; fi; }
 
 az account show -o none 2>/dev/null || fail "Sign in first: az login"
 az extension show -n aigateway -o none 2>/dev/null ||
@@ -64,6 +66,7 @@ ACR="$(output ACR_NAME)"
 GATEWAY="$(output AI_GATEWAY_NAME)"
 GATEWAY_ID="$(output AI_GATEWAY_ID)"
 
+relogin
 echo "== 2/6 Building images in $ACR"
 export IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
 az acr build -r "$ACR" -t "mcp-server:$IMAGE_TAG" tools/mcp-server -o none
@@ -71,19 +74,23 @@ az acr build -r "$ACR" -t "shipping-api:$IMAGE_TAG" tools/shipping-api -o none
 az acr build -r "$ACR" -t "returns-agent:$IMAGE_TAG" agents/returns-agent -o none
 az acr build -r "$ACR" -t "aca-agent:$IMAGE_TAG" clients/aca-agent -o none
 
+relogin
 echo "== 3/6 Container apps and the MCP servers behind the gateway"
 DEPLOY_APPS=true deploy
 
+relogin
 echo "== 4/6 Access: runtime roles that no team file grants, and the built-in all-access key"
 python3 scripts/teams.py prune "$AZURE_ENV_NAME" --apply
 # Every gateway has a built-in key named master that can call every model and tool. Callers here use Entra ID only.
 az aigateway api-key update -g "$RG" --gateway-name "$GATEWAY" -n master --state suspended -o none
 echo "Suspended the built-in master key."
 
+relogin
 echo "== 5/6 Gateway-wide baseline policies (platform/baseline-policies.json)"
 python3 scripts/apply_baseline.py "$GATEWAY_ID" > /dev/null
 echo "Applied."
 
+relogin
 echo "== 6/6 Gateway telemetry"
 RG="$RG" GATEWAY="$GATEWAY" APP_INSIGHTS_NAME="$(output APPLICATION_INSIGHTS_NAME)" \
   infra/scripts/connect-telemetry.sh
