@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Deploys the secure AI gateway end to end:
-#   1. infrastructure (network, Foundry, gateway, models, Foundry project, registry, Container Apps environment)
-#   2. builds the agent and MCP server images in the registry (az acr build, no local Docker needed)
-#   3. the container apps and the MCP tool server behind the gateway
-#   4. removes runtime roles on the gateway's assets that no team file grants
-#   5. the gateway's OpenTelemetry exporter to Application Insights
+# Deploys the AI gateway end to end:
+#   1. infrastructure (network, Foundry, gateway, model and alias, Foundry project, registry, Container Apps environment)
+#   2. builds the images in the registry (az acr build, no local Docker needed)
+#   3. the container apps, and the orders, shipping and returns MCP servers behind the gateway
+#   4. removes runtime roles that no team file grants, and suspends the built-in all-access key
+#   5. the gateway-wide baseline policies
+#   6. the gateway's OpenTelemetry exporter to Application Insights
 # Who can call what comes from the team files in teams/. Then writes the outputs to .env for scripts/test.sh.
 #
 #   AZURE_ENV_NAME=aigw-demo AZURE_LOCATION=swedencentral ./scripts/deploy.sh
@@ -54,30 +55,39 @@ deploy() {
   az deployment sub create -n "$AZURE_ENV_NAME" -l "$AZURE_LOCATION" \
     -f infra/main.bicep -p infra/main.bicepparam -o none
 }
-output() { az deployment sub show -n "$AZURE_ENV_NAME" --query "properties.outputs.$1.value" -o tsv; }
+output() { python3 scripts/outputs.py "$AZURE_ENV_NAME" "$1"; }
 
-echo "== 1/5 Infrastructure (about 10 minutes)"
+echo "== 1/6 Infrastructure (about 10 minutes)"
 DEPLOY_APPS=false deploy
 RG="$(output AZURE_RESOURCE_GROUP)"
 ACR="$(output ACR_NAME)"
+GATEWAY="$(output AI_GATEWAY_NAME)"
+GATEWAY_ID="$(output AI_GATEWAY_ID)"
 
-echo "== 2/5 Building images in $ACR"
+echo "== 2/6 Building images in $ACR"
 export IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
 az acr build -r "$ACR" -t "mcp-server:$IMAGE_TAG" tools/mcp-server -o none
+az acr build -r "$ACR" -t "shipping-api:$IMAGE_TAG" tools/shipping-api -o none
+az acr build -r "$ACR" -t "returns-agent:$IMAGE_TAG" agents/returns-agent -o none
 az acr build -r "$ACR" -t "aca-agent:$IMAGE_TAG" clients/aca-agent -o none
 
-echo "== 3/5 Container apps and the MCP tool server"
+echo "== 3/6 Container apps and the MCP servers behind the gateway"
 DEPLOY_APPS=true deploy
 
-echo "== 4/5 Runtime roles that no team file grants"
+echo "== 4/6 Access: runtime roles that no team file grants, and the built-in all-access key"
 python3 scripts/teams.py prune "$AZURE_ENV_NAME" --apply
+# Every gateway has a built-in key named master that can call every model and tool. Callers here use Entra ID only.
+az aigateway api-key update -g "$RG" --gateway-name "$GATEWAY" -n master --state suspended -o none
+echo "Suspended the built-in master key."
 
-echo "== 5/5 Gateway telemetry"
-RG="$RG" GATEWAY="$(output AI_GATEWAY_NAME)" APP_INSIGHTS_NAME="$(output APPLICATION_INSIGHTS_NAME)" \
+echo "== 5/6 Gateway-wide baseline policies (platform/baseline-policies.json)"
+python3 scripts/apply_baseline.py "$GATEWAY_ID" > /dev/null
+echo "Applied."
+
+echo "== 6/6 Gateway telemetry"
+RG="$RG" GATEWAY="$GATEWAY" APP_INSIGHTS_NAME="$(output APPLICATION_INSIGHTS_NAME)" \
   infra/scripts/connect-telemetry.sh
 
-# Strings only: the ACCESS_* arrays are for scripts/teams.py prune, not for shells.
-az deployment sub show -n "$AZURE_ENV_NAME" --query "properties.outputs" -o json |
-  python3 -c 'import json,sys; [print(f"{k}={v[\"value\"]}") for k,v in json.load(sys.stdin).items() if isinstance(v["value"], str)]' > .env
+python3 scripts/outputs.py "$AZURE_ENV_NAME" --env > .env
 echo "INBOUND_MODE=$INBOUND_MODE" >> .env
 echo "Done. Outputs written to .env. Next: ./scripts/test.sh"

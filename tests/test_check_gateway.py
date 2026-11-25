@@ -51,7 +51,7 @@ def test_a_governed_gateway_passes_with_inherited_policies():
 @pytest.mark.parametrize(
     ("change", "check"),
     [
-        (lambda s: s["apiKeys"].append({"name": "app-key"}), "no-runtime-api-keys"),
+        (lambda s: s["apiKeys"].append({"name": "app-key", "properties": {"state": "active"}}), "no-runtime-api-keys"),
         (
             lambda s: s["roleAssignments"].append(
                 {"scope": "/subscriptions/s", "principalId": "p3", "roleDefinitionId": f"/x/{MODELS_USER}"}
@@ -93,6 +93,12 @@ def test_workspace_rate_limit_covers_mcp_servers():
     snapshot["workspaces"][0]["properties"] = policies("requestRateLimit")
     snapshot["workspaces"][0]["toolServers"][0]["properties"] = {}
     assert ("tool-limits", "PASS") in statuses(snapshot)
+
+
+def test_a_suspended_master_key_passes():
+    snapshot = copy.deepcopy(GOOD)
+    snapshot["apiKeys"].append({"name": "master", "properties": {"state": "suspended"}})
+    assert ("no-runtime-api-keys", "PASS") in statuses(snapshot)
 
 
 def test_public_access_fails_only_when_private_is_expected():

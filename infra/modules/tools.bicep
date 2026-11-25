@@ -1,7 +1,10 @@
-// Federates the private MCP server (Container Apps, internal) behind the gateway, with a per-caller request rate
-// limit, and grants AI Gateway Tools User on this MCP server only, to the callers from the team files. Clients connect to
-//   https://<gateway-host>/default/toolservers/<serverName>/mcp
-// and see the backend's tools as <namespace>_<tool>.
+// Publishes one MCP server on the gateway, with a per-caller request rate limit, and grants AI Gateway Tools User on
+// this MCP server only, to the callers from the team files. Its backend is either
+//   - a remote MCP server (Streamable HTTP):        source = { kind: 'mcp', url }
+//   - a REST API described by OpenAPI:              source = { kind: 'openApi', specBase64 }
+//     The gateway turns each operation into a tool and calls the API at the spec's servers[0].url.
+// Clients connect to https://<gateway-host>/default/toolservers/<serverName>/mcp and see <namespace>_<tool>.
+// The backends here are private and accept only the gateway's subnet, so the gateway sends them no credentials.
 targetScope = 'resourceGroup'
 
 import { caller } from 'types.bicep'
@@ -9,12 +12,18 @@ import { caller } from 'types.bicep'
 param gatewayName string
 
 @description('MCP server name. Part of the endpoint URL; can\'t be changed after creation.')
-param serverName string = 'orders'
+param serverName string
 
-param namespace string = 'orders'
+@description('Unique among the gateway\'s MCP servers. Shown in the portal catalog.')
+param displayName string
 
-@description('Private URL of the backend MCP server (Streamable HTTP).')
-param mcpUrl string
+@description('Helps people and agents understand what the tools do.')
+param serverDescription string
+
+param namespace string = serverName
+
+@description('{ kind: \'mcp\', url } or { kind: \'openApi\', specBase64 }.')
+param source object
 
 @minValue(1)
 param callsPerMinutePerCaller int = 60
@@ -23,6 +32,27 @@ param callsPerMinutePerCaller int = 60
 param callers caller[] = []
 
 var toolsUserRoleId = 'dce03f8d-857f-4e40-a90d-67770fa6ecd2'
+
+var mcpEndpoint = {
+  namespace: namespace
+  kind: 'mcp'
+  mode: 'failClosed'
+  mcp: {
+    endpoint: { url: source.?url ?? '' }
+    transport: 'streamableHttp'
+  }
+}
+var openApiEndpoint = {
+  namespace: namespace
+  kind: 'openApi'
+  mode: 'failClosed'
+  openApi: {
+    specSource: {
+      type: 'inline'
+      contentBase64: source.?specBase64 ?? ''
+    }
+  }
+}
 
 #disable-next-line BCP081
 resource gateway 'Microsoft.ApiManagement/aigateways@2026-11-01' existing = {
@@ -40,25 +70,15 @@ resource toolServer 'Microsoft.ApiManagement/aigateways/workspaces/toolServers@2
   parent: workspace
   name: serverName
   properties: {
-    displayName: 'Orders (private)'
-    description: 'Look up orders and stock levels. Synthetic sample data, served privately from the VNet.'
-    toolServerType: 'mcp'
-    endpoints: [
-      {
-        namespace: namespace
-        kind: 'mcp'
-        mcp: {
-          endpoint: { url: mcpUrl }
-          transport: 'streamableHttp'
-        }
-      }
-    ]
+    displayName: displayName
+    description: serverDescription
+    toolServerType: source.kind
+    endpoints: [ source.kind == 'openApi' ? openApiEndpoint : mcpEndpoint ]
     policies: [
       {
         type: 'requestRateLimit'
-        scope: 'resource'
-        callsPerPeriod: callsPerMinutePerCaller
-        periodSeconds: 60
+        count: callsPerMinutePerCaller
+        period: 'minute'
         counterKey: [ 'identity' ]
       }
     ]
@@ -78,4 +98,3 @@ resource toolsUsers 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for 
 output serverName string = toolServer.name
 output toolServerId string = toolServer.id
 output mcpEndpoint string = 'https://${gateway.properties.frontend.defaultHostname}/default/toolservers/${serverName}/mcp'
-output grants array = [for c in callers: { scope: toolServer.id, principalId: c.principalId, roleDefinitionId: toolsUserRoleId }]

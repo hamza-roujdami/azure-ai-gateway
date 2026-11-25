@@ -32,10 +32,11 @@ PRINCIPAL_TYPES = ("User", "Group", "ServicePrincipal")
 PLATFORM_PRINCIPALS = {
     "platform:deployer": "the identity that runs scripts/deploy.sh",
     "platform:apps": "the user-assigned identity of this deployment's container apps",
+    "platform:returns-agent": "the user-assigned identity of the returns specialist agent",
     "platform:foundry-project": "the managed identity of this deployment's Foundry project",
 }
 # Managed identities are service principals. The deployer's type comes from the deployment (AZURE_PRINCIPAL_TYPE).
-PLATFORM_SERVICE_PRINCIPALS = {"platform:apps", "platform:foundry-project"}
+PLATFORM_SERVICE_PRINCIPALS = {"platform:apps", "platform:returns-agent", "platform:foundry-project"}
 TEAM_KEYS = {"$schema", "name", "description", "owner", "models", "tools", "members"}
 MEMBER_KEYS = {"name", "principalId", "principalType", "dailyBudgetUsd"}
 TEAM_NAME = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
@@ -82,9 +83,18 @@ def load_catalog(path: Path = CATALOG_FILE) -> Catalog:
     data = json.loads(path.read_text())
     models = {m["alias"]: m.get("description", "") for m in data.get("models", [])}
     tools = {t["server"]: t.get("description", "") for t in data.get("tools", [])}
-    if len(models) != 1 or len(tools) != 1:
-        raise ValueError(f"{path.name}: the templates publish exactly one model alias and one MCP server today")
+    if len(models) != 1 or not tools:
+        raise ValueError(f"{path.name}: the templates publish exactly one model alias and at least one MCP server")
     return Catalog(models=models, tools=tools)
+
+
+def load_budget_ceiling() -> Decimal | None:
+    """The gateway-wide daily cost limit per caller in platform/baseline-policies.json. Every policy can block a call,
+    so a team budget above it would never be reached."""
+    from apply_baseline import daily_cost_ceiling, load_baseline
+
+    ceiling = daily_cost_ceiling(load_baseline())
+    return None if ceiling is None else Decimal(str(ceiling))
 
 
 def _names(value: Any, field: str, known: dict[str, str] | None, errors: list[str]) -> tuple[str, ...]:
@@ -172,7 +182,7 @@ def parse_team(data: Any, expected_name: str, catalog: Catalog | None) -> tuple[
     return Team(name, owner.strip(), description, models, tools, tuple(members)), []
 
 
-def _check_across_teams(teams: list[Team]) -> list[str]:
+def _check_across_teams(teams: list[Team], ceiling: Decimal | None = None) -> list[str]:
     errors: list[str] = []
     types: dict[str, tuple[str, str]] = {}
     budgets: dict[str, tuple[Decimal, str]] = {}
@@ -182,6 +192,11 @@ def _check_across_teams(teams: list[Team]) -> list[str]:
             if seen[0] != m.principal_type:
                 errors.append(f"{m.principal_id} is a {seen[0]} in {seen[1]} but a {m.principal_type} in {team.name}")
             if m.daily_budget_usd is not None:
+                if ceiling is not None and m.daily_budget_usd > ceiling:
+                    errors.append(
+                        f"teams/{team.name}.json: {m.name} has a budget of {m.daily_budget_usd}, above the "
+                        f"gateway-wide limit of {ceiling} a day in platform/baseline-policies.json, which blocks first"
+                    )
                 prior = budgets.setdefault(m.principal_id, (m.daily_budget_usd, team.name))
                 if prior[0] != m.daily_budget_usd:
                     errors.append(
@@ -191,7 +206,9 @@ def _check_across_teams(teams: list[Team]) -> list[str]:
     return errors
 
 
-def parse_teams(files: dict[str, str], catalog: Catalog | None) -> tuple[list[Team], list[str]]:
+def parse_teams(
+    files: dict[str, str], catalog: Catalog | None, ceiling: Decimal | None = None
+) -> tuple[list[Team], list[str]]:
     """Parses team files given as {file name: content}. Returns the valid teams and every error, by file."""
     teams: list[Team] = []
     errors: list[str] = []
@@ -205,7 +222,7 @@ def parse_teams(files: dict[str, str], catalog: Catalog | None) -> tuple[list[Te
         errors.extend(f"teams/{file_name}: {e}" for e in team_errors)
         if team:
             teams.append(team)
-    errors.extend(_check_across_teams(teams))
+    errors.extend(_check_across_teams(teams, ceiling))
     return teams, errors
 
 
@@ -383,17 +400,45 @@ def stale_assignments(
     return stale
 
 
+def _gateway_assets(gateway_id: str) -> list[str]:
+    """Every model alias and MCP server on the gateway, including ones no longer in platform/catalog.json."""
+    ids = []
+    for kind in ("aliases", "toolServers"):
+        url = f"https://management.azure.com{gateway_id}/workspaces/default/{kind}?api-version=2026-11-01"
+        while url:
+            page = _az("rest", "--method", "get", "--url", url)
+            ids += [item["id"] for item in page.get("value", [])]
+            url = page.get("nextLink")
+    return ids
+
+
+def managed_scopes(outputs: dict[str, Any], assets: list[str]) -> set[str]:
+    """The assets whose runtime roles prune manages. Every asset on the gateway, so a server removed from the catalog
+    loses its grants too, but only after a full deployment: one without the apps doesn't output the tool grants."""
+    scopes = {s.lower() for s in outputs["ACCESS_SCOPES"] if s}
+    full = bool(outputs.get("AI_GATEWAY_MCP_SERVERS"))
+    return scopes | {a.lower() for a in assets if full or "/toolservers/" not in a.lower()}
+
+
 def prune(deployment: str, apply: bool) -> int:
-    outputs = _az("deployment", "sub", "show", "-n", deployment, "--query", "properties.outputs")
-    grants = outputs["ACCESS_GRANTS"]["value"]
-    scopes = {s.lower() for s in outputs["ACCESS_SCOPES"]["value"]}
-    desired = {(g["scope"].lower(), g["principalId"].lower(), g["roleDefinitionId"].lower()) for g in grants}
-    assignments = [a for scope in sorted(scopes) for a in _az("role", "assignment", "list", "--scope", scope)]
+    from outputs import deployment_outputs
+
+    outputs = deployment_outputs(deployment)
+    desired = {
+        (g["scope"].lower(), g["principalId"].lower(), g["roleDefinitionId"].lower()) for g in outputs["ACCESS_GRANTS"]
+    }
+    scopes = managed_scopes(outputs, _gateway_assets(outputs["AI_GATEWAY_ID"]))
+    # --fill-principal-name false: no Microsoft Graph call, which a short-lived CI sign-in may no longer allow
+    assignments = [
+        a
+        for scope in sorted(scopes)
+        for a in _az("role", "assignment", "list", "--scope", scope, "--fill-principal-name", "false")
+    ]
     stale = stale_assignments(assignments, desired, scopes)
     for a in stale:
         role = RUNTIME_ROLES[a["roleDefinitionId"].rsplit("/", 1)[-1].lower()]
-        who = a.get("principalName") or a["principalId"]
-        print(f"{'Removing' if apply else 'Would remove'} {role} for {who} on {a['scope'].rsplit('/', 1)[-1]}")
+        action = "Removing" if apply else "Would remove"
+        print(f"{action} {role} for {a['principalId']} on {a['scope'].rsplit('/', 1)[-1]}")
     if stale and apply:
         _az("role", "assignment", "delete", "--ids", *[a["id"] for a in stale])
     if not stale:
@@ -415,7 +460,7 @@ def _gateway_url_from_env() -> str:
 
 
 def _load_or_exit(catalog: Catalog) -> list[Team]:
-    teams, errors = parse_teams(read_team_files(), catalog)
+    teams, errors = parse_teams(read_team_files(), catalog, load_budget_ceiling())
     if errors:
         print("\n".join(f"ERROR {e}" for e in errors), file=sys.stderr)
         sys.exit(1)

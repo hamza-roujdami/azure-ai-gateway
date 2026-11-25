@@ -1,0 +1,6 @@
+agent-framework-core==1.22.0
+agent-framework-openai==1.17.0
+mcp==1.30.0
+openai==3.46.0
+azure-identity==1.27.0
+pydantic-settings==2.12.0

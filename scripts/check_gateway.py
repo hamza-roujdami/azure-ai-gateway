@@ -3,7 +3,7 @@
   python scripts/check_gateway.py <gateway resource ID> [--expect-private] [--json]
 
 It reads the gateway with your Azure sign-in, changes nothing, and fails when it finds:
-  - runtime API keys: each one can call every model and tool on the gateway
+  - active runtime API keys, including the built-in master key: each one can call every model and tool on the gateway
   - runtime roles granted on the whole gateway, on a workspace, or on anything above the gateway
   - model aliases without a token or cost limit, or without content safety
   - MCP servers without a request rate limit
@@ -47,9 +47,17 @@ def _name(resource: dict[str, Any]) -> str:
 
 
 def check_api_keys(keys: list[dict[str, Any]]) -> Finding:
+    active = [k for k in keys if ((k.get("properties") or {}).get("state") or "active").lower() == "active"]
+    if active:
+        names = ", ".join(sorted(_name(k) for k in active))
+        return Finding(
+            "FAIL",
+            "no-runtime-api-keys",
+            f"{len(active)} active runtime API keys ({names}) can call every asset. Every gateway has a built-in "
+            "master key: suspend it with az aigateway api-key update -n master --state suspended",
+        )
     if keys:
-        names = ", ".join(sorted(_name(k) for k in keys))
-        return Finding("FAIL", "no-runtime-api-keys", f"{len(keys)} runtime API keys ({names}) can call every asset")
+        return Finding("PASS", "no-runtime-api-keys", f"No active runtime API keys ({len(keys)} suspended)")
     return Finding("PASS", "no-runtime-api-keys", "No runtime API keys: callers use Microsoft Entra ID")
 
 
@@ -200,9 +208,19 @@ def collect(gateway_id: str) -> dict[str, Any]:
                 "telemetryExporters": _list(f"{ws_id}/telemetryExporters"),
             }
         )
-    assignments = {a["id"]: a for a in _az("role", "assignment", "list", "--scope", gateway_id, "--include-inherited")}
+    assignments = {
+        a["id"]: a
+        for a in _az(
+            "role", "assignment", "list", "--scope", gateway_id, "--include-inherited", "--fill-principal-name", "false"
+        )
+    }
     for ws in workspaces:
-        assignments.update({a["id"]: a for a in _az("role", "assignment", "list", "--scope", ws["id"])})
+        assignments.update(
+            {
+                a["id"]: a
+                for a in _az("role", "assignment", "list", "--scope", ws["id"], "--fill-principal-name", "false")
+            }
+        )
     return {
         "gateway": gateway,
         "apiKeys": _list(f"{gateway_id}/apiKeys"),

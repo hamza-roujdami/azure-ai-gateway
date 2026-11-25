@@ -1,10 +1,10 @@
 {
   "$schema": "../platform/team.schema.json",
   "name": "order-assistant",
-  "description": "An AI agent on Container Apps that answers order questions with the chat model and the orders tools.",
+  "description": "An AI agent on Container Apps that answers order questions with the chat model, the orders and shipping tools, and the returns specialist.",
   "owner": "order-assistant-leads",
   "models": ["chat"],
-  "tools": ["orders"],
+  "tools": ["orders", "shipping", "returns"],
   "members": [
     {
       "name": "agent",

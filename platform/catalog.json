@@ -8,7 +8,21 @@
   "tools": [
     {
       "server": "orders",
-      "description": "Look up orders and stock levels. Read-only, synthetic data, served from a private MCP server."
+      "kind": "mcp",
+      "displayName": "Orders",
+      "description": "Look up orders and stock levels. Read-only, synthetic data, from a private MCP server."
+    },
+    {
+      "server": "shipping",
+      "kind": "openApi",
+      "displayName": "Shipping",
+      "description": "Delivery quotes by country and service. A private REST API, published as tools from its OpenAPI description."
+    },
+    {
+      "server": "returns",
+      "kind": "mcp",
+      "displayName": "Returns specialist",
+      "description": "An agent that recommends a refund, replacement, repair, or decline for a returned item. It only recommends."
     }
   ]
 }

@@ -1,0 +1,208 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Shipping API",
+    "description": "Delivery quotes from the Swedish warehouses. Synthetic sample data.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/countries": {
+      "get": {
+        "summary": "List the countries the warehouses deliver to.",
+        "operationId": "list_countries",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response List Countries"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/quotes": {
+      "get": {
+        "summary": "Get the carrier, delivery time in business days, and cost to ship a product SKU to a country.",
+        "operationId": "get_delivery_quote",
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "description": "Product SKU, for example WIDGET-42.",
+              "title": "Sku"
+            },
+            "description": "Product SKU, for example WIDGET-42."
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$",
+              "description": "Two-letter destination country code, for example SE.",
+              "title": "Country"
+            },
+            "description": "Two-letter destination country code, for example SE."
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Service",
+              "description": "standard or express.",
+              "default": "standard"
+            },
+            "description": "standard or express."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quote"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The warehouses don't deliver to that country."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Quote": {
+        "properties": {
+          "sku": {
+            "type": "string",
+            "title": "Sku"
+          },
+          "country": {
+            "type": "string",
+            "title": "Country"
+          },
+          "service": {
+            "$ref": "#/components/schemas/Service"
+          },
+          "carrier": {
+            "type": "string",
+            "title": "Carrier"
+          },
+          "business_days": {
+            "type": "integer",
+            "title": "Business Days"
+          },
+          "cost_eur": {
+            "type": "number",
+            "title": "Cost Eur"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sku",
+          "country",
+          "service",
+          "carrier",
+          "business_days",
+          "cost_eur"
+        ],
+        "title": "Quote"
+      },
+      "Service": {
+        "type": "string",
+        "enum": [
+          "standard",
+          "express"
+        ],
+        "title": "Service"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://shipping-api.invalid"
+    }
+  ]
+}

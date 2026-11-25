@@ -138,6 +138,15 @@ def test_stale_assignments_keep_granted_roles_and_ignore_other_roles_and_scopes(
     assert stale == [leftover]
 
 
+def test_prune_manages_every_gateway_asset_but_tool_servers_only_after_a_full_deployment():
+    gw = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.ApiManagement/aigateways/gw/workspaces/default"
+    assets = [f"{gw}/aliases/chat", f"{gw}/toolServers/orders", f"{gw}/toolServers/retired"]
+    full = {"ACCESS_SCOPES": [f"{gw}/aliases/chat", f"{gw}/toolServers/orders"], "AI_GATEWAY_MCP_SERVERS": "orders"}
+    assert teams.managed_scopes(full, assets) == {a.lower() for a in assets}
+    infra_only = {"ACCESS_SCOPES": [f"{gw}/aliases/chat"], "AI_GATEWAY_MCP_SERVERS": ""}
+    assert teams.managed_scopes(infra_only, assets) == {f"{gw}/aliases/chat".lower()}
+
+
 def test_quickstart_shows_only_the_teams_assets():
     found, _ = parse_teams({"alpha.json": team_file()}, CATALOG)
     out = teams.quickstart(found[0], CATALOG, "https://gw.example/")

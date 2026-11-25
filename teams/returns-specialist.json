@@ -1,0 +1,16 @@
+{
+  "$schema": "../platform/team.schema.json",
+  "name": "returns-specialist",
+  "description": "The returns specialist agent. Other agents reach it as the returns MCP server; it reasons with the chat model as its own identity, with its own budget.",
+  "owner": "returns-leads",
+  "models": ["chat"],
+  "tools": [],
+  "members": [
+    {
+      "name": "agent",
+      "principalId": "platform:returns-agent",
+      "principalType": "ServicePrincipal",
+      "dailyBudgetUsd": 2
+    }
+  ]
+}

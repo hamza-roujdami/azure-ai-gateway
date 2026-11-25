@@ -1,0 +1,51 @@
+name: deploy
+# Deploys the gateway when a change to who-can-call-what, the platform, or the apps reaches main, then proves it.
+# Signs in to Azure with OpenID Connect: no secrets. Set up once with scripts/setup-github-deploy.sh, which sets
+# DEPLOY_ENABLED; until then the job is skipped, so forks don't fail.
+on:
+  push:
+    branches: [main]
+    paths: [teams/**, platform/**, infra/**, tools/**, agents/**, clients/**, scripts/**]
+  workflow_dispatch:
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: azure
+    timeout-minutes: 60
+    env:
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      # platform:deployer in the team files is the developer, not this pipeline's identity
+      AZURE_PRINCIPAL_ID: ${{ vars.DEVELOPER_PRINCIPAL_ID }}
+      AZURE_PRINCIPAL_TYPE: ${{ vars.DEVELOPER_PRINCIPAL_TYPE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install the aigateway CLI extension
+        run: |
+          curl -fsSL https://aka.ms/aigateway-cli-install -o install.sh
+          sh install.sh
+          rm install.sh
+      - name: Deploy
+        run: ./scripts/deploy.sh
+      # The first sign-in's GitHub token expires after a few minutes, and the tests need tokens for new audiences
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Test
+        run: ./scripts/test.sh

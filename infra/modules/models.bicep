@@ -16,7 +16,7 @@ param modelVersion string
 param aliasName string = 'chat'
 
 @minValue(1)
-param tokensPerMinutePerCaller int = 20000
+param tokensPerMinutePerCaller int = 150000
 
 @allowed([ 'None', 'Low', 'Medium', 'High' ])
 param contentSafetySeverity string = 'Medium'

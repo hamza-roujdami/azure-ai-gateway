@@ -17,11 +17,16 @@ def client(monkeypatch):
 
 def test_settings_build_gateway_urls(monkeypatch):
     monkeypatch.setenv("AI_GATEWAY_URL", "https://gw.example/")
+    monkeypatch.setenv("AI_GATEWAY_MCP_SERVERS", "orders, shipping,returns")
     from gateway_agent import Settings
 
     s = Settings()
     assert s.model_base_url == "https://gw.example/default/models/openai/v1/"
-    assert s.mcp_url == "https://gw.example/default/toolservers/orders/mcp"
+    assert s.mcp_urls == {
+        "orders": "https://gw.example/default/toolservers/orders/mcp",
+        "shipping": "https://gw.example/default/toolservers/shipping/mcp",
+        "returns": "https://gw.example/default/toolservers/returns/mcp",
+    }
     assert s.ai_gateway_model == "chat"
 
 
@@ -53,6 +58,7 @@ def test_open_agent_gives_openai_an_async_token_provider(monkeypatch):
 
     class FakeTool:
         def __init__(self, **kwargs):
+            captured.setdefault("tools", []).append(kwargs["name"])
             captured["headers"] = kwargs["header_provider"]({})
 
         async def __aenter__(self):
@@ -71,6 +77,7 @@ def test_open_agent_gives_openai_an_async_token_provider(monkeypatch):
     monkeypatch.setattr(gateway_agent, "MCPStreamableHTTPTool", FakeTool)
     monkeypatch.setattr(gateway_agent, "Agent", lambda **kwargs: kwargs)
     monkeypatch.setenv("AI_GATEWAY_URL", "https://gw.example")
+    monkeypatch.setenv("AI_GATEWAY_MCP_SERVERS", "orders,shipping")
 
     async def run():
         async with gateway_agent.open_agent(gateway_agent.Settings(), FakeCredential()):
@@ -78,5 +85,6 @@ def test_open_agent_gives_openai_an_async_token_provider(monkeypatch):
             assert await captured["api_key"]() == "tok-123"
 
     asyncio.run(run())
+    assert captured["tools"] == ["orders", "shipping"]
     assert captured["headers"] == {"Authorization": "Bearer tok-123"}
     assert captured["base_url"] == "https://gw.example/default/models/openai/v1/"

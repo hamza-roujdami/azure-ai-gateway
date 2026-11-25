@@ -15,8 +15,9 @@ param imageTag = readEnvironmentVariable('IMAGE_TAG', 'latest')
 
 param modelName = 'gpt-5-mini'
 param modelVersion = '2025-08-07'
-param modelCapacity = 50
-param tokensPerMinutePerCaller = 20000
+// Coding agents send about 45,000 tokens a turn, so the per-caller limit and the capacity leave room for them.
+param modelCapacity = 300
+param tokensPerMinutePerCaller = 150000
 param contentSafetySeverity = 'Medium'
 param dailyBudgetPerCallerUsd = '5'
 

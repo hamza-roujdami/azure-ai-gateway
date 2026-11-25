@@ -1,7 +1,11 @@
-// The workloads in the internal Container Apps environment, all running as one user-assigned identity:
-//   mcp-server   the private MCP tool backend. VNet-only ingress, restricted to the gateway's integration subnet.
-//   agent        the Agent Framework agent (POST /chat). Environment-only ingress: not reachable from the VNet.
-//   agent-smoke  a manual job that calls the agent from inside the environment, to test the whole private path.
+// The workloads in the internal Container Apps environment:
+//   mcp-server     the orders MCP server. VNet-only ingress, restricted to the gateway's integration subnet.
+//   shipping-api   a REST API the gateway publishes as MCP tools from its OpenAPI description. Same ingress rule.
+//   returns-agent  the returns specialist agent behind an MCP tool. Same ingress rule, and its own identity: it calls
+//                  the gateway's model as itself.
+//   agent          the Agent Framework order agent (POST /chat). Environment-only ingress: not reachable from the VNet.
+//   agent-smoke    a manual job that calls the agent from inside the environment, to test the whole private path.
+// Every app but returns-agent runs as the shared apps identity.
 targetScope = 'resourceGroup'
 
 param location string
@@ -10,13 +14,21 @@ param environmentId string
 param registryServer string
 param identityId string
 param identityClientId string
+param returnsIdentityId string
+param returnsIdentityClientId string
 param imageTag string
 
 param gatewayUrl string
 param aliasName string
-param mcpServerName string
 
-@description('CIDR of the gateway integration subnet: the only source allowed to call the MCP server.')
+@description('MCP servers the order agent uses, comma-separated.')
+param agentMcpServers string
+
+@description('Replicas kept running. 1 avoids cold starts, which can time out a chain of tool calls; 0 scales to zero.')
+@minValue(0)
+param minReplicas int = 1
+
+@description('CIDR of the gateway integration subnet: the only source allowed to call the backends.')
 param gatewaySubnetPrefix string
 
 var registries = [
@@ -29,6 +41,27 @@ var userIdentity = {
   type: 'UserAssigned'
   userAssignedIdentities: { '${identityId}': {} }
 }
+// external = reachable from the VNet. The environment is internal, so never from the internet.
+var gatewayOnlyIngress = {
+  external: true
+  targetPort: 8000
+  transport: 'http'
+  allowInsecure: false
+  ipSecurityRestrictions: [
+    {
+      name: 'ai-gateway-only'
+      description: 'Only the AI gateway integration subnet'
+      ipAddressRange: gatewaySubnetPrefix
+      action: 'Allow'
+    }
+  ]
+}
+var healthProbe = [
+  {
+    type: 'Liveness'
+    httpGet: { path: '/healthz', port: 8000 }
+  }
+]
 
 resource mcpServer 'Microsoft.App/containerApps@2025-01-01' = {
   name: 'mcp-server'
@@ -39,21 +72,7 @@ resource mcpServer 'Microsoft.App/containerApps@2025-01-01' = {
     environmentId: environmentId
     workloadProfileName: 'Consumption'
     configuration: {
-      // external = reachable from the VNet. The environment is internal, so never from the internet.
-      ingress: {
-        external: true
-        targetPort: 8000
-        transport: 'http'
-        allowInsecure: false
-        ipSecurityRestrictions: [
-          {
-            name: 'ai-gateway-only'
-            description: 'Only the AI gateway integration subnet'
-            ipAddressRange: gatewaySubnetPrefix
-            action: 'Allow'
-          }
-        ]
-      }
+      ingress: gatewayOnlyIngress
       registries: registries
     }
     template: {
@@ -62,15 +81,70 @@ resource mcpServer 'Microsoft.App/containerApps@2025-01-01' = {
           name: 'mcp-server'
           image: '${registryServer}/mcp-server:${imageTag}'
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
-          probes: [
-            {
-              type: 'Liveness'
-              httpGet: { path: '/healthz', port: 8000 }
-            }
-          ]
+          probes: healthProbe
         }
       ]
-      scale: { minReplicas: 0, maxReplicas: 3 }
+      scale: { minReplicas: minReplicas, maxReplicas: 3 }
+    }
+  }
+}
+
+resource shippingApi 'Microsoft.App/containerApps@2025-01-01' = {
+  name: 'shipping-api'
+  location: location
+  tags: tags
+  identity: userIdentity
+  properties: {
+    environmentId: environmentId
+    workloadProfileName: 'Consumption'
+    configuration: {
+      ingress: gatewayOnlyIngress
+      registries: registries
+    }
+    template: {
+      containers: [
+        {
+          name: 'shipping-api'
+          image: '${registryServer}/shipping-api:${imageTag}'
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          probes: healthProbe
+        }
+      ]
+      scale: { minReplicas: minReplicas, maxReplicas: 3 }
+    }
+  }
+}
+
+resource returnsAgent 'Microsoft.App/containerApps@2025-01-01' = {
+  name: 'returns-agent'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${returnsIdentityId}': {} }
+  }
+  properties: {
+    environmentId: environmentId
+    workloadProfileName: 'Consumption'
+    configuration: {
+      ingress: gatewayOnlyIngress
+      registries: [ { server: registryServer, identity: returnsIdentityId } ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'returns-agent'
+          image: '${registryServer}/returns-agent:${imageTag}'
+          env: [
+            { name: 'AI_GATEWAY_URL', value: gatewayUrl }
+            { name: 'AI_GATEWAY_MODEL', value: aliasName }
+            { name: 'AZURE_CLIENT_ID', value: returnsIdentityClientId }
+          ]
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+          probes: healthProbe
+        }
+      ]
+      scale: { minReplicas: minReplicas, maxReplicas: 3 }
     }
   }
 }
@@ -78,7 +152,7 @@ resource mcpServer 'Microsoft.App/containerApps@2025-01-01' = {
 var agentEnv = [
   { name: 'AI_GATEWAY_URL', value: gatewayUrl }
   { name: 'AI_GATEWAY_MODEL', value: aliasName }
-  { name: 'AI_GATEWAY_MCP_SERVER', value: mcpServerName }
+  { name: 'AI_GATEWAY_MCP_SERVERS', value: agentMcpServers }
   // DefaultAzureCredential picks the user-assigned identity with this client ID.
   { name: 'AZURE_CLIENT_ID', value: identityClientId }
 ]
@@ -116,7 +190,7 @@ resource agent 'Microsoft.App/containerApps@2025-01-01' = {
           ]
         }
       ]
-      scale: { minReplicas: 0, maxReplicas: 3 }
+      scale: { minReplicas: minReplicas, maxReplicas: 3 }
     }
   }
 }
@@ -154,5 +228,7 @@ resource smoke 'Microsoft.App/jobs@2025-01-01' = {
 }
 
 output mcpUrl string = 'https://${mcpServer.properties.configuration.ingress.fqdn}/mcp'
+output shippingApiUrl string = 'https://${shippingApi.properties.configuration.ingress.fqdn}'
+output returnsUrl string = 'https://${returnsAgent.properties.configuration.ingress.fqdn}/mcp'
 output agentUrl string = 'https://${agent.properties.configuration.ingress.fqdn}'
 output smokeJobName string = smoke.name

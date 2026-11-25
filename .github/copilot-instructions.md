@@ -27,34 +27,55 @@ subscription or personal identifiers in any file.
   Bicep can't load a folder, so `scripts/teams.py render` merges them into the `teams` parameter (env var
   `AI_GATEWAY_TEAMS`, read by `main.bicepparam`). Teams supply existing Entra object IDs; the repo doesn't create
   groups. `platform/team.schema.json` and `teams.py` must agree (`tests/test_teams.py` guards it).
-- **Next, in order:** gateway-wide baseline policies (lab 09, merge script, since declaring the `default` workspace
-  in Bicep would replace it); keyless starters for the AI app and the coding agent; telemetry claims for per-team
-  reports (lab 14); OIDC deploy pipeline (lab 21); then the extra backends. Don't claim "production-ready" until the
-  matching test passes.
+- **Built so far (all deployed and tested live):** team files and onboarding by pull request; the gateway-wide
+  baseline (`platform/baseline-policies.json`, applied by `scripts/apply_baseline.py`); the built-in `master` key
+  suspended by `deploy.sh`; three MCP servers (orders MCP, shipping REST API published from OpenAPI, returns
+  specialist agent with its own identity); keyless clients for the three workload types; the usage report by team;
+  the OIDC deploy workflow. **Next ideas:** model routing and failover (labs 22, 29), backend authentication for the
+  MCP sources, Agent 365 and agent hooks (labs 19, 20, 30). Don't claim "production-ready" until the matching test
+  passes.
 
 ## Architecture (see README.md)
 - **Gateway:** system-assigned managed identity with Foundry User on the model account, private routing through
   `snet-aigw` (delegated `Microsoft.App/environments`), `publicNetworkAccess` set from `inboundMode`.
 - **Model backend:** Foundry account with `disableLocalAuth: true`, `publicNetworkAccess: Disabled`, a private
-  endpoint, and the 3 Foundry private DNS zones.
-- **Gateway assets:** names come from `platform/catalog.json` (one alias, one MCP server today)
+  endpoint, and the 3 Foundry private DNS zones. Capacity 300k TPM, per-caller token limit 150k/min: one Copilot CLI
+  turn sends ~45k tokens, and 20k/min throttled it.
+- **Gateway assets:** names come from `platform/catalog.json` (one alias; MCP servers orders, shipping, returns)
   - provider `foundry` (managed identity)
   - model with `tokenLimit` + `contentSafety` policies
   - alias `chat` with a per-caller daily `costLimit` and the team budget overrides (`tid` + `oid` claims)
-  - toolServer `orders` with `requestRateLimit`
-- **Callers:** Entra ID only. No runtime API keys are ever created. `modules/team-access.bicep` turns the `teams`
-  parameter into callers: Models User on the alias, Tools User on the toolServer, never the workspace or gateway.
-  `platform:deployer|apps|foundry-project` in team files resolve to this deployment's identities. Token scope:
-  `https://ai.gateway.azure.com/.default`. Runtime role IDs: Models User `a6b68e3d-…`, Tools User `dce03f8d-…`,
-  AI Gateway User `caad7a21-…` (every asset; never grant it broadly).
-- **Private MCP server:** `tools/mcp-server`, on an internal Container Apps environment. VNet ingress restricted to
-  the gateway subnet CIDR.
+  - toolServers from `modules/tools.bicep`, `source` = `{kind: 'mcp', url}` or `{kind: 'openApi', specBase64}`
+    (inline spec, `servers[0].url` = private URL), each with `requestRateLimit` as `{count, period: 'minute'}`.
+    `callsPerPeriod`/`periodSeconds` are rejected by the GA API.
+- **Callers:** Entra ID only. No runtime API keys are ever created, and the built-in `master` key is suspended.
+  `modules/team-access.bicep` turns the `teams` parameter into callers: Models User on the alias, Tools User per
+  toolServer, never the workspace or gateway. `platform:deployer|apps|returns-agent|foundry-project` resolve to this
+  deployment's identities. Token scope: `https://ai.gateway.azure.com/.default`. Runtime role IDs: Models User
+  `a6b68e3d-…`, Tools User `dce03f8d-…`, AI Gateway User `caad7a21-…` (every asset; never grant it broadly).
+- **Backends:** `tools/mcp-server` (orders), `tools/shipping-api` (FastAPI; `openapi.json` is committed and must match:
+  `python shipping.py --write-spec`), `agents/returns-agent` (its own user-assigned identity). All on internal
+  Container Apps, VNet ingress restricted to the gateway subnet CIDR, `minReplicas: 1` (cold starts made the gateway
+  return 504 to the agent's MCP calls).
 - **Clients:**
-  - `clients/aca-agent`: Agent Framework + FastAPI, user-assigned identity, environment-only ingress, plus the
-    `agent-smoke` job.
+  - `clients/support-desk`: AI app, one model call, `explain()` maps gateway refusals to actions.
+  - `clients/aca-agent`: Agent Framework + FastAPI, user-assigned identity, environment-only ingress, one MCP tool per
+    server in `AI_GATEWAY_MCP_SERVERS`, plus the `agent-smoke` job.
   - `clients/foundry-agent`: a prompt agent using the project's gateway connection; model `ai-gateway/chat`.
+  - `scripts/copilot-with-gateway.sh`: Copilot CLI with `COPILOT_PROVIDER_BEARER_TOKEN` (an Entra token) and
+    `--additional-mcp-config` for the granted MCP servers.
 
-## Decisions and constraints (keep them; they come from Microsoft docs)
+## Decisions and constraints (keep them; they come from Microsoft docs or live testing)
+- **Azure CLI 2.87 changes the case of deployment output names** (`ACR_NAME` → `acR_NAME`). Read outputs with
+  `scripts/outputs.py`, never `az deployment sub show --query properties.outputs.X`.
+- **In CI, `platform:deployer` is the developer** (`DEVELOPER_PRINCIPAL_ID`), not the pipeline's service principal,
+  or `prune` would revoke the developer's access. `test.sh` skips its as-the-developer checks for service principals.
+- **Foundry with public access off answers `401`** to calls from the internet (auth is checked first), not 403.
+- **Python on OpenSSL 3.5+ fails TLS 1.3 to `*.services.ai.azure.com`** from some networks (post-quantum key share);
+  `clients/foundry-agent/openssl-classic.cnf` works around it.
+- **Gateway telemetry:** request spans (`OTelSpans`, Kind Server, `POST /default/...`) carry status codes including
+  403 and the `oid` claim; request logs (`OTelLogs`) carry model and tool calls (`gen_ai.operation.name =
+  execute_tool`) and the cost estimate.
 - **Default `INBOUND_MODE=hybrid`.** Foundry Agent Service calls connected models from its managed plane, not the
   VNet, so a Foundry agent needs the gateway's public endpoint (Entra ID only). `private` mode turns the public
   endpoint off and needs the inbound private endpoint.

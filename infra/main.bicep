@@ -52,10 +52,10 @@ param modelVersion string = '2025-08-07'
 
 @description('Model capacity in thousands of tokens per minute.')
 @minValue(1)
-param modelCapacity int = 50
+param modelCapacity int = 300
 
 @minValue(1)
-param tokensPerMinutePerCaller int = 20000
+param tokensPerMinutePerCaller int = 150000
 
 @allowed([ 'None', 'Low', 'Medium', 'High' ])
 param contentSafetySeverity string = 'Medium'
@@ -72,7 +72,9 @@ var token = take(uniqueString(subscription().id, environmentName, location), 6)
 var allTags = union({ 'azd-env-name': environmentName, workload: 'ai-gateway' }, tags)
 var catalog = loadJsonContent('../platform/catalog.json')
 var aliasName = catalog.models[0].alias
-var mcpServerName = catalog.tools[0].server
+var toolNames = map(catalog.tools, t => t.server)
+var shippingSpec = loadJsonContent('../tools/shipping-api/openapi.json')
+var toolsUserRoleId = 'dce03f8d-857f-4e40-a90d-67770fa6ecd2'
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: 'rg-${environmentName}'
@@ -152,6 +154,7 @@ module registry 'modules/registry.bicep' = {
     tags: allTags
     registryName: 'acraigw${token}'
     identityName: 'id-apps-${environmentName}'
+    returnsIdentityName: 'id-returns-${environmentName}'
     logAnalyticsId: monitoring.outputs.logAnalyticsId
   }
 }
@@ -206,15 +209,17 @@ module teamAccess 'modules/team-access.bicep' = {
     platformPrincipals: {
       'platform:deployer': principalId
       'platform:apps': registry.outputs.identityPrincipalId
+      'platform:returns-agent': registry.outputs.returnsIdentityPrincipalId
       'platform:foundry-project': foundryAgents.outputs.projectPrincipalId
     }
     platformPrincipalTypes: {
       'platform:deployer': principalType
       'platform:apps': 'ServicePrincipal'
+      'platform:returns-agent': 'ServicePrincipal'
       'platform:foundry-project': 'ServicePrincipal'
     }
     aliasName: aliasName
-    mcpServerName: mcpServerName
+    toolNames: toolNames
   }
 }
 
@@ -248,24 +253,47 @@ module apps 'modules/aca-apps.bicep' = if (deployApps) {
     registryServer: registry.outputs.loginServer
     identityId: registry.outputs.identityId
     identityClientId: registry.outputs.identityClientId
+    returnsIdentityId: registry.outputs.returnsIdentityId
+    returnsIdentityClientId: registry.outputs.returnsIdentityClientId
     imageTag: imageTag
     gatewayUrl: gateway.outputs.gatewayUrl
     aliasName: aliasName
-    mcpServerName: mcpServerName
+    agentMcpServers: join(toolNames, ',')
     gatewaySubnetPrefix: network.outputs.gatewaySubnetPrefix
   }
 }
 
-module tools 'modules/tools.bicep' = if (deployApps) {
+// The backend of each MCP server in platform/catalog.json. The shipping API is published from its OpenAPI
+// description, with its private URL as the server the gateway calls.
+var toolSources = {
+  orders: { kind: 'mcp', url: apps.?outputs.mcpUrl ?? '' }
+  shipping: {
+    kind: 'openApi'
+    specBase64: base64(string(union(shippingSpec, { servers: [ { url: apps.?outputs.shippingApiUrl ?? '' } ] })))
+  }
+  returns: { kind: 'mcp', url: apps.?outputs.returnsUrl ?? '' }
+}
+
+module tools 'modules/tools.bicep' = [for t in catalog.tools: if (deployApps) {
   scope: rg
-  name: 'tools'
+  name: 'tools-${t.server}'
   params: {
     gatewayName: gateway.outputs.gatewayName
-    serverName: mcpServerName
-    mcpUrl: apps.?outputs.mcpUrl ?? ''
-    callers: teamAccess.outputs.toolCallers
+    serverName: t.server
+    displayName: t.displayName
+    serverDescription: t.description
+    source: toolSources[t.server]
+    callers: teamAccess.outputs.toolCallers[t.server]
   }
-}
+}]
+
+// Computed rather than read from the tools modules, which don't exist on the first pass (deployApps = false).
+var toolServerIds = map(toolNames, n => '${gateway.outputs.gatewayId}/workspaces/default/toolServers/${n}')
+var toolGrants = flatten(map(toolNames, n => map(teamAccess.outputs.toolCallers[n], c => {
+  scope: '${gateway.outputs.gatewayId}/workspaces/default/toolServers/${n}'
+  principalId: c.principalId
+  roleDefinitionId: toolsUserRoleId
+})))
 
 output AZURE_RESOURCE_GROUP string = rg.name
 output AZURE_LOCATION string = location
@@ -273,7 +301,8 @@ output AI_GATEWAY_ID string = gateway.outputs.gatewayId
 output AI_GATEWAY_NAME string = gateway.outputs.gatewayName
 output AI_GATEWAY_URL string = gateway.outputs.gatewayUrl
 output AI_GATEWAY_MODEL string = models.outputs.aliasName
-output AI_GATEWAY_MCP_URL string = tools.?outputs.mcpEndpoint ?? ''
+output AI_GATEWAY_MODEL_ID string = modelName
+output AI_GATEWAY_MCP_SERVERS string = deployApps ? join(toolNames, ',') : ''
 output AI_GATEWAY_PRIVATE_DNS_ZONE string = gatewayPe.?outputs.zoneName ?? ''
 output FOUNDRY_MODELS_ACCOUNT string = foundryModels.outputs.accountName
 output FOUNDRY_MODELS_ENDPOINT string = foundryModels.outputs.endpoint
@@ -286,5 +315,8 @@ output AGENT_SMOKE_JOB string = apps.?outputs.smokeJobName ?? ''
 output MCP_SERVER_PRIVATE_URL string = apps.?outputs.mcpUrl ?? ''
 
 // For scripts/teams.py prune: the runtime roles the team files grant, and the assets whose roles they manage.
-output ACCESS_GRANTS array = concat(models.outputs.grants, tools.?outputs.grants ?? [])
-output ACCESS_SCOPES array = concat([ models.outputs.aliasId ], deployApps ? [ tools.?outputs.toolServerId ?? '' ] : [])
+output ACCESS_GRANTS array = concat(models.outputs.grants, deployApps ? toolGrants : [])
+output ACCESS_SCOPES array = concat([ models.outputs.aliasId ], deployApps ? toolServerIds : [])
+
+// For scripts/teams.py report: which object ID belongs to which team member.
+output TEAM_MEMBERS array = teamAccess.outputs.members

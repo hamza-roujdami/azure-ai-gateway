@@ -1,5 +1,7 @@
 -r clients/aca-agent/requirements.txt
 -r tools/mcp-server/requirements.txt
+-r tools/shipping-api/requirements.txt
+-r agents/returns-agent/requirements.txt
 -r clients/foundry-agent/requirements.txt
 pytest==8.4.2
 ruff==0.14.5

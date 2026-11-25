@@ -13,7 +13,12 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["clients/aca-agent", "tools/mcp-server", "scripts"]
+pythonpath = [
+  "clients/aca-agent", "clients/support-desk", "tools/mcp-server", "tools/shipping-api", "agents/returns-agent", "scripts",
+]
 
 [tool.ruff.lint.isort]
-known-first-party = ["orders", "server", "gateway_agent", "app", "smoke", "teams", "check_gateway"]
+known-first-party = [
+  "orders", "server", "gateway_agent", "app", "smoke", "teams", "check_gateway", "apply_baseline", "shipping",
+  "returns_agent", "summarize", "outputs", "usage_report",
+]

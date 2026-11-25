@@ -1,4 +1,6 @@
-// Container registry for the agent and MCP server images, and the user-assigned identity the container apps run as.
+// Container registry for the images, and the user-assigned identities the container apps run as:
+//   apps            the order agent, the smoke job, the orders MCP server and the shipping API
+//   returns-agent   the returns specialist only, so its model use has its own role, budget, and telemetry
 // No admin user (Basic has no anonymous pull): Container Apps pull with the identity (AcrPull).
 targetScope = 'resourceGroup'
 
@@ -6,10 +8,17 @@ param location string
 param tags object = {}
 param registryName string
 param identityName string
+param returnsIdentityName string
 param logAnalyticsId string
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
+  location: location
+  tags: tags
+}
+
+resource returnsIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: returnsIdentityName
   location: location
   tags: tags
 }
@@ -36,6 +45,16 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+resource returnsAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: registry
+  name: guid(registry.id, returnsIdentity.id, acrPullRoleId)
+  properties: {
+    principalId: returnsIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+  }
+}
+
 resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'to-log-analytics'
   scope: registry
@@ -50,3 +69,6 @@ output loginServer string = registry.properties.loginServer
 output identityId string = identity.id
 output identityClientId string = identity.properties.clientId
 output identityPrincipalId string = identity.properties.principalId
+output returnsIdentityId string = returnsIdentity.id
+output returnsIdentityClientId string = returnsIdentity.properties.clientId
+output returnsIdentityPrincipalId string = returnsIdentity.properties.principalId
