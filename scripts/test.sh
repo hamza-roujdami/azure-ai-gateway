@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Proves the access model and every workload end to end. Reads .env from scripts/deploy.sh.
 #   ./scripts/test.sh
-# You are platform:deployer in the team files: support-desk and coding-agents grant you the chat model and the
-# shipping tools, and nothing else. Run it as the identity that deployed. Role changes take several minutes to apply.
+# You are platform:deployer in the team files: support-desk, coding-agents and employees grant you the chat and mistral
+# models, the shipping tools, and my-orders, which acts as you. Nothing else: not the commerce tools that the order
+# agent uses. Run it as the identity that deployed. Role changes take several minutes to apply.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 [[ -f .env ]] || { echo "Run ./scripts/deploy.sh first (it writes .env)." >&2; exit 1; }
@@ -25,6 +26,11 @@ mcp_status() {  # HTTP status of an MCP initialize call to one of the gateway's 
 
 CHAT="$AI_GATEWAY_URL/default/models/openai/v1/chat/completions"
 BODY="{\"model\":\"$AI_GATEWAY_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with one word: ok\"}]}"
+served_from() {  # the region that answered a chat call, from the x-ms-region response header, as in swedencentral
+  curl -s -o /dev/null -D - --max-time 90 -X POST "$CHAT" -H "Authorization: Bearer $1" \
+    -H 'Content-Type: application/json' "${@:2}" -d "$BODY" | tr -d '\r' |
+    awk -F': ' 'tolower($1)=="x-ms-region" {gsub(/ /, "", $2); print tolower($2)}'
+}
 
 echo "== Gateway: who can call what"
 if [[ "$INBOUND_MODE" == "hybrid" ]]; then
@@ -36,9 +42,11 @@ if [[ "$INBOUND_MODE" == "hybrid" ]]; then
     TOKEN="$(az account get-access-token --scope https://ai.gateway.azure.com/.default --query accessToken -o tsv)"
     check "you can call the chat model" \
       "$(status -X POST "$CHAT" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$BODY")" 200
+    MISTRAL="${BODY/\"model\":\"$AI_GATEWAY_MODEL\"/\"model\":\"mistral\"}"
+    check "you can call a second model family (mistral, coding-agents)" \
+      "$(status -X POST "$CHAT" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$MISTRAL")" 200
     check "you can use the shipping tools (coding-agents)" "$(mcp_status shipping "$TOKEN")" 200
-    check "you're denied the orders tools (no team grants them to you)" "$(mcp_status orders "$TOKEN")" 403
-    check "you're denied the returns specialist" "$(mcp_status returns "$TOKEN")" 403
+    check "you're denied the commerce tools (no team grants them to you)" "$(mcp_status commerce "$TOKEN")" 403
   else
     TOKEN="$(az account get-access-token --scope https://ai.gateway.azure.com/.default --query accessToken -o tsv)"
     check "the pipeline's identity has no runtime access" \
@@ -50,10 +58,35 @@ else
     "$(status -X POST "$CHAT" -H 'Content-Type: application/json' -d "$BODY")" 403
 fi
 
+echo "== Model routing: one alias, two regions (scripts/demo-failover.sh shows failover under throttling)"
+if [[ "$INBOUND_MODE" != "hybrid" || "$AS_DEVELOPER" != true ]]; then skip "runs from your machine, as the developer"
+else
+  # Right after an outage (demo-failover.sh --outage), calls keep failing over until the primary is back on every node.
+  for _ in 1 2 3 4 5 6; do region="$(served_from "$TOKEN")"; [[ "$region" == "$AZURE_LOCATION" ]] && break; sleep 10; done
+  check "chat is served from the primary region" "$region" "$AZURE_LOCATION"
+  check "x-workload: batch skips the primary (CEL condition)" \
+    "$(served_from "$TOKEN" -H 'x-workload: batch')" "$AZURE_BACKUP_LOCATION"
+fi
+
+echo "== Users: a tool that acts as the signed-in user (on-behalf-of)"
+if [[ "$INBOUND_MODE" != "hybrid" || "$AS_DEVELOPER" != true ]]; then skip "runs from your machine, as the developer"
+elif [[ ",$AI_GATEWAY_MCP_SERVERS," != *",my-orders,"* ]]; then skip "my-orders isn't deployed: no Entra apps (see deploy.sh)"
+elif "$PY" -c "import mcp" 2>/dev/null; then
+  ME="$(az ad signed-in-user show --query id -o tsv)"
+  if who="$("$PY" scripts/mcp_call.py my-orders my-orders_whoami 2>&1)" && grep -q "$ME" <<<"$who"; then
+    check "the backend sees you, not a shared account" ok ok
+  else echo "$who" | tail -3 | sed 's/^/    /'; check "the backend sees you, not a shared account" failed ok; fi
+  if mine="$("$PY" scripts/mcp_call.py my-orders my-orders_my_orders 2>&1)" && grep -q '"account": "Contoso"' <<<"$mine"; then
+    check "my-orders returns only your account's orders" ok ok
+  else echo "$mine" | tail -3 | sed 's/^/    /'; check "my-orders returns only your account's orders" failed ok; fi
+else skip "pip install mcp to run this check"; fi
+
 echo "== Backends: not reachable from the internet"
 FTOKEN="$(az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv)"
-code="$(status "${FOUNDRY_MODELS_ENDPOINT%/}/openai/v1/models" -H "Authorization: Bearer $FTOKEN")"
-[[ "$code" == 401 || "$code" == 403 ]] && code=rejected  # public access off: no model call from outside the VNet
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${FOUNDRY_MODELS_ENDPOINT%/}/openai/v1/models" \
+  -H "Authorization: Bearer $FTOKEN")"
+# Public access off: a call from outside the VNet gets 401 or 403, or no answer at all (000). Anything but 2xx counts.
+[[ "$code" != 2* ]] && code=rejected
 check "Foundry model account rejects public calls" "$code" rejected
 MCP_HOST="$(sed -E 's#https://([^/]+).*#\1#' <<<"$MCP_SERVER_PRIVATE_URL")"
 resolves="$("$PY" -c "import socket,sys

@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # Deploys the AI gateway end to end:
-#   1. infrastructure (network, Foundry, gateway, model and alias, Foundry project, registry, Container Apps environment)
-#   2. builds the images in the registry (az acr build, no local Docker needed)
-#   3. the container apps, and the orders, shipping and returns MCP servers behind the gateway
-#   4. removes runtime roles that no team file grants, and suspends the built-in all-access key
-#   5. the gateway-wide baseline policies
-#   6. the gateway's OpenTelemetry exporter to Application Insights
+#   1. infrastructure (network, two Foundry accounts, gateway, models and aliases, Foundry project, registry,
+#      Container Apps environment)
+#   2. the Microsoft Entra apps for tools that act as the signed-in user (on-behalf-of), when you can create them
+#   3. builds the images in the registry (az acr build, no local Docker needed)
+#   4. the container apps, and the MCP servers from platform/catalog.json behind the gateway
+#   5. removes runtime roles that no team file grants, and suspends the built-in all-access key
+#   6. the gateway-wide baseline policies
+#   7. the gateway's OpenTelemetry exporter to Application Insights
 # Who can call what comes from the team files in teams/. Then writes the outputs to .env for scripts/test.sh.
 #
 #   AZURE_ENV_NAME=aigw-demo AZURE_LOCATION=swedencentral ./scripts/deploy.sh
 #   INBOUND_MODE=private GATEWAY_PRIVATE_ENDPOINT=true ./scripts/deploy.sh   # needs private endpoint preview access
+#   CLAUDE_ORGANIZATION_NAME="Contoso Ltd" CLAUDE_COUNTRY_CODE=AE CLAUDE_INDUSTRY=retail ./scripts/deploy.sh
+#                                         # adds the claude alias: Foundry sends this attestation to Anthropic
+#   SKIP_ENTRA_APPS=true ./scripts/deploy.sh  # don't create Entra apps; my-orders is skipped unless they exist
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -59,7 +64,7 @@ deploy() {
 }
 output() { python3 scripts/outputs.py "$AZURE_ENV_NAME" "$1"; }
 
-echo "== 1/6 Infrastructure (about 10 minutes)"
+echo "== 1/7 Infrastructure (about 10 minutes)"
 DEPLOY_APPS=false deploy
 RG="$(output AZURE_RESOURCE_GROUP)"
 ACR="$(output ACR_NAME)"
@@ -67,7 +72,32 @@ GATEWAY="$(output AI_GATEWAY_NAME)"
 GATEWAY_ID="$(output AI_GATEWAY_ID)"
 
 relogin
-echo "== 2/6 Building images in $ACR"
+echo "== 2/7 Microsoft Entra apps for tools that act as the signed-in user (infra/entra)"
+# It creates two app registrations that pre-authorize each other, so no tenant-wide consent is needed: permission to
+# register applications is enough. When you're signed in as a user, it runs (and is idempotent); otherwise, for
+# example in GitHub Actions, the app IDs come from its last run. Without them, the my-orders MCP server is skipped.
+ENTRA_DEPLOYMENT="entra-$AZURE_ENV_NAME"
+entra_output() { az deployment group show -g "$RG" -n "$ENTRA_DEPLOYMENT" --query "properties.outputs.$1.value" -o tsv; }
+if [[ -z "${ON_BEHALF_OF_BACKEND_APP_ID:-}" ]]; then
+  if [[ "${SKIP_ENTRA_APPS:-false}" != "true" && "$(az account show --query user.type -o tsv)" == "user" ]] &&
+    az deployment group create -g "$RG" -n "$ENTRA_DEPLOYMENT" -f infra/entra/main.bicep \
+      -p baseName="$AZURE_ENV_NAME" gatewayIdentityPrincipalId="$(output AI_GATEWAY_IDENTITY_PRINCIPAL_ID)" -o none; then
+    echo "Created or updated the Entra apps."
+  fi
+  if [[ "$(az deployment group show -g "$RG" -n "$ENTRA_DEPLOYMENT" --query properties.provisioningState -o tsv \
+    2>/dev/null)" == "Succeeded" ]]; then
+    ON_BEHALF_OF_BACKEND_APP_ID="$(entra_output backendAppId)"
+    ON_BEHALF_OF_TOKEN_EXCHANGE_APP_ID="$(entra_output tokenExchangeAppId)"
+  else
+    echo "WARNING: no Entra apps for on-behalf-of, so the my-orders MCP server is skipped. Ask an identity" \
+      "administrator to run this script, or to deploy infra/entra/main.bicep to $RG as $ENTRA_DEPLOYMENT." >&2
+  fi
+fi
+export ON_BEHALF_OF_BACKEND_APP_ID="${ON_BEHALF_OF_BACKEND_APP_ID:-}"
+export ON_BEHALF_OF_TOKEN_EXCHANGE_APP_ID="${ON_BEHALF_OF_TOKEN_EXCHANGE_APP_ID:-}"
+
+relogin
+echo "== 3/7 Building images in $ACR"
 export IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
 az acr build -r "$ACR" -t "mcp-server:$IMAGE_TAG" tools/mcp-server -o none
 az acr build -r "$ACR" -t "shipping-api:$IMAGE_TAG" tools/shipping-api -o none
@@ -75,23 +105,23 @@ az acr build -r "$ACR" -t "returns-agent:$IMAGE_TAG" agents/returns-agent -o non
 az acr build -r "$ACR" -t "aca-agent:$IMAGE_TAG" clients/aca-agent -o none
 
 relogin
-echo "== 3/6 Container apps and the MCP servers behind the gateway"
+echo "== 4/7 Container apps and the MCP servers behind the gateway"
 DEPLOY_APPS=true deploy
 
 relogin
-echo "== 4/6 Access: runtime roles that no team file grants, and the built-in all-access key"
+echo "== 5/7 Access: runtime roles that no team file grants, and the built-in all-access key"
 python3 scripts/teams.py prune "$AZURE_ENV_NAME" --apply
 # Every gateway has a built-in key named master that can call every model and tool. Callers here use Entra ID only.
 az aigateway api-key update -g "$RG" --gateway-name "$GATEWAY" -n master --state suspended -o none
 echo "Suspended the built-in master key."
 
 relogin
-echo "== 5/6 Gateway-wide baseline policies (platform/baseline-policies.json)"
+echo "== 6/7 Gateway-wide baseline policies (platform/baseline-policies.json)"
 python3 scripts/apply_baseline.py "$GATEWAY_ID" > /dev/null
 echo "Applied."
 
 relogin
-echo "== 6/6 Gateway telemetry"
+echo "== 7/7 Gateway telemetry"
 RG="$RG" GATEWAY="$GATEWAY" APP_INSIGHTS_NAME="$(output APPLICATION_INSIGHTS_NAME)" \
   infra/scripts/connect-telemetry.sh
 

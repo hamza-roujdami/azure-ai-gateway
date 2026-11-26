@@ -1,0 +1,17 @@
+{
+  "$schema": "../platform/team.schema.json",
+  "name": "employees",
+  "description": "Employees who look up their own orders from any MCP client, such as GitHub Copilot CLI or VS Code. The my-orders tool runs as each signed-in user, so it only returns their data. In production, add a group of users here.",
+  "owner": "digital-workplace",
+  "models": [],
+  "tools": [
+    "my-orders"
+  ],
+  "members": [
+    {
+      "name": "developer",
+      "principalId": "platform:deployer",
+      "principalType": "User"
+    }
+  ]
+}

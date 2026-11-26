@@ -9,8 +9,9 @@ It reads the gateway with your Azure sign-in, changes nothing, and fails when it
   - MCP servers without a request rate limit
   - telemetry that captures prompt and response payloads
   - public network access, with --expect-private
-It warns when no telemetry exporter exists, or when a model provider doesn't sign in with a managed identity.
-Policies count when they're on the asset, on the alias's backend model, or on the workspace.
+It warns when no telemetry exporter exists, when a model provider doesn't sign in with a managed identity, or when a
+model alias has a single backend, so a throttled or failing deployment reaches its callers.
+Policies count when they're on the asset, on every backend model of the alias, or on the workspace.
 """
 
 from __future__ import annotations
@@ -84,15 +85,19 @@ def check_runtime_roles(assignments: list[dict[str, Any]], gateway_id: str) -> F
 def check_models(workspaces: list[dict[str, Any]]) -> list[Finding]:
     findings = []
     aliases = 0
+    single = []
     for ws in workspaces:
         inherited = _policy_types(ws)
         models = {m.get("id", "").lower(): _policy_types(m) for m in ws.get("models", [])}
         for alias in ws.get("aliases", []):
             aliases += 1
             backends = (alias.get("properties") or {}).get("backendModels") or []
-            types = inherited | _policy_types(alias)
-            for b in backends:
-                types |= models.get(b.get("resourceId", "").lower(), set())
+            if len(backends) < 2:
+                single.append(_name(alias))
+            # A backend model's policy covers the alias only when every backend has it: a request that fails over
+            # to a backend without it isn't covered.
+            per_backend = [models.get(b.get("resourceId", "").lower(), set()) for b in backends]
+            types = inherited | _policy_types(alias) | (set.intersection(*per_backend) if per_backend else set())
             if not types & {"tokenLimit", "costLimit"}:
                 findings.append(Finding("FAIL", "model-limits", f"Alias '{_name(alias)}' has no token or cost limit"))
             if "contentSafety" not in types:
@@ -101,6 +106,16 @@ def check_models(workspaces: list[dict[str, Any]]) -> list[Finding]:
         return [Finding("WARN", "model-limits", "No model aliases to check")]
     if not findings:
         findings.append(Finding("PASS", "model-limits", f"{aliases} model aliases have limits and content safety"))
+    if single:
+        findings.append(
+            Finding(
+                "WARN",
+                "model-failover",
+                f"Aliases with one backend, so its throttling or outage reaches callers: {', '.join(sorted(single))}",
+            )
+        )
+    else:
+        findings.append(Finding("PASS", "model-failover", f"{aliases} model aliases have a backup backend"))
     return findings
 
 

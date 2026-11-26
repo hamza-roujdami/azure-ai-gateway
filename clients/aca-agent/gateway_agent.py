@@ -1,8 +1,9 @@
 """An Agent Framework agent whose model AND tool calls all go through the AI gateway, with no keys.
 
 - Model: the gateway's OpenAI-compatible endpoint, called with the alias (e.g. "chat").
-- Tools:  one gateway MCP endpoint per MCP server it's granted: orders (an MCP server), shipping (a REST API published
-          from its OpenAPI description), and returns (a specialist agent behind an MCP tool).
+- Tools:  the gateway's commerce MCP server: one endpoint that federates three backends, each under its own namespace:
+          orders_* (an MCP server), shipping_* (a REST API published from its OpenAPI description), and returns_* (a
+          specialist agent behind an MCP tool).
 All send a Microsoft Entra token for the gateway's audience. In Container Apps the token comes from the app's
 managed identity (AZURE_CLIENT_ID); on a laptop, from `az login`. The token provider caches and refreshes it.
 """
@@ -22,9 +23,10 @@ GATEWAY_SCOPE = "https://ai.gateway.azure.com/.default"
 
 INSTRUCTIONS = """
 You are an order-support assistant. Use the tools; never guess order, stock, or shipping data.
-- orders: order status, items, and stock levels.
-- shipping: delivery quotes by country and service (standard or express).
-- returns: for any return, refund, or replacement question, ask the returns specialist and pass on its decision.
+- orders_* tools: order status, items, and stock levels.
+- shipping_* tools: delivery quotes by country and service (standard or express).
+- returns_* tools: for any return, refund, or replacement question, ask the returns specialist and pass on its
+  decision.
 If a tool says something isn't found, say so. Keep answers under 120 words.
 """
 
@@ -32,7 +34,7 @@ If a tool says something isn't found, say so. Keep answers under 120 words.
 class Settings(BaseSettings):
     ai_gateway_url: str
     ai_gateway_model: str = "chat"
-    ai_gateway_mcp_servers: str = "orders"
+    ai_gateway_mcp_servers: str = "commerce"
 
     @property
     def model_base_url(self) -> str:

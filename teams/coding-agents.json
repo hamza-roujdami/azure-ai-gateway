@@ -1,10 +1,15 @@
 {
   "$schema": "../platform/team.schema.json",
   "name": "coding-agents",
-  "description": "Developers' coding agents, such as GitHub Copilot CLI with scripts/copilot-with-gateway.sh, signed in as the developer. The chat model and the shipping tools, not the orders data.",
+  "description": "Developers' coding agents, such as GitHub Copilot CLI with scripts/copilot-with-gateway.sh, signed in as the developer. Two model families and the shipping tools, not the orders data.",
   "owner": "developer-platform",
-  "models": ["chat"],
-  "tools": ["shipping"],
+  "models": [
+    "chat",
+    "mistral"
+  ],
+  "tools": [
+    "shipping"
+  ],
   "members": [
     {
       "name": "developer",

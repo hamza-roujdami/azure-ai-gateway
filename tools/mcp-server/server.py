@@ -1,4 +1,4 @@
-"""A small private MCP server (Streamable HTTP on :8000/mcp) that the AI gateway federates.
+"""The orders MCP server: a small private MCP server (Streamable HTTP on :8000/mcp) that the AI gateway federates.
 
 It runs in the internal Container Apps environment and only accepts traffic from the gateway's integration subnet
 (ingress IP restriction), so agents reach these tools only through the gateway, with Entra ID, RBAC and rate limits.

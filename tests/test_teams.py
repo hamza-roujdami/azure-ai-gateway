@@ -152,3 +152,16 @@ def test_quickstart_shows_only_the_teams_assets():
     out = teams.quickstart(found[0], CATALOG, "https://gw.example/")
     assert '`https://gw.example/default/models/openai/v1`, with `"model": "chat"`' in out
     assert "toolservers" not in out
+
+
+def test_quickstart_points_anthropic_aliases_at_the_messages_route():
+    catalog = Catalog(
+        models={"chat": "Chat", "claude": "Claude"},
+        tools={"orders": "Orders"},
+        apis={"chat": "openai", "claude": "anthropic"},
+    )
+    found, _ = parse_teams({"alpha.json": team_file(models=["claude", "chat"])}, catalog)
+    out = teams.quickstart(found[0], catalog, "https://gw.example")
+    assert '`https://gw.example/default/models/anthropic (Messages API: /v1/messages)`, with `"model": "claude"`' in out
+    # The curl and Python examples use the first alias that speaks the OpenAI API.
+    assert '"model": "chat", "messages"' in out

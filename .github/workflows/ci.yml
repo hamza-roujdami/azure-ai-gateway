@@ -25,5 +25,6 @@ jobs:
           az bicep install
           az bicep build -f infra/main.bicep --stdout > /dev/null
           az bicep build -f infra/modules/telemetry.bicep --stdout > /dev/null
+          az bicep build -f infra/entra/main.bicep --stdout > /dev/null
           AI_GATEWAY_TEAMS="$(python scripts/teams.py render)" az bicep build-params -f infra/main.bicepparam --stdout > /dev/null
       - run: for f in scripts/*.sh infra/scripts/*.sh; do bash -n "$f"; done

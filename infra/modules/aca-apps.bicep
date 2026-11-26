@@ -3,6 +3,8 @@
 //   shipping-api   a REST API the gateway publishes as MCP tools from its OpenAPI description. Same ingress rule.
 //   returns-agent  the returns specialist agent behind an MCP tool. Same ingress rule, and its own identity: it calls
 //                  the gateway's model as itself.
+//   my-orders      the signed-in user's orders (the mcp-server image, me_server.py). Same ingress rule, and it only
+//                  accepts user tokens that the gateway exchanged on-behalf-of. Deployed when myOrders is set.
 //   agent          the Agent Framework order agent (POST /chat). Environment-only ingress: not reachable from the VNet.
 //   agent-smoke    a manual job that calls the agent from inside the environment, to test the whole private path.
 // Every app but returns-agent runs as the shared apps identity.
@@ -30,6 +32,9 @@ param minReplicas int = 1
 
 @description('CIDR of the gateway integration subnet: the only source allowed to call the backends.')
 param gatewaySubnetPrefix string
+
+@description('{ backendAppId, tokenExchangeAppId, accountOwners } from infra/entra, or {} to skip my-orders.')
+param myOrders object = {}
 
 var registries = [
   {
@@ -149,6 +154,39 @@ resource returnsAgent 'Microsoft.App/containerApps@2025-01-01' = {
   }
 }
 
+resource myOrdersServer 'Microsoft.App/containerApps@2025-01-01' = if (!empty(myOrders)) {
+  name: 'my-orders'
+  location: location
+  tags: tags
+  identity: userIdentity
+  properties: {
+    environmentId: environmentId
+    workloadProfileName: 'Consumption'
+    configuration: {
+      ingress: gatewayOnlyIngress
+      registries: registries
+    }
+    template: {
+      containers: [
+        {
+          name: 'my-orders'
+          image: '${registryServer}/mcp-server:${imageTag}'
+          command: [ 'python', 'me_server.py' ]
+          env: [
+            { name: 'AZURE_TENANT_ID', value: tenant().tenantId }
+            { name: 'BACKEND_APP_ID', value: myOrders.?backendAppId ?? '' }
+            { name: 'TOKEN_EXCHANGE_APP_ID', value: myOrders.?tokenExchangeAppId ?? '' }
+            { name: 'ACCOUNT_OWNERS', value: string(myOrders.?accountOwners ?? {}) }
+          ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          probes: healthProbe
+        }
+      ]
+      scale: { minReplicas: minReplicas, maxReplicas: 3 }
+    }
+  }
+}
+
 var agentEnv = [
   { name: 'AI_GATEWAY_URL', value: gatewayUrl }
   { name: 'AI_GATEWAY_MODEL', value: aliasName }
@@ -230,5 +268,6 @@ resource smoke 'Microsoft.App/jobs@2025-01-01' = {
 output mcpUrl string = 'https://${mcpServer.properties.configuration.ingress.fqdn}/mcp'
 output shippingApiUrl string = 'https://${shippingApi.properties.configuration.ingress.fqdn}'
 output returnsUrl string = 'https://${returnsAgent.properties.configuration.ingress.fqdn}/mcp'
+output myOrdersUrl string = empty(myOrders) ? '' : 'https://${myOrdersServer!.properties.configuration.ingress.fqdn}/mcp'
 output agentUrl string = 'https://${agent.properties.configuration.ingress.fqdn}'
 output smokeJobName string = smoke.name

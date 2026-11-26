@@ -1,10 +1,14 @@
 {
   "$schema": "../platform/team.schema.json",
   "name": "order-assistant",
-  "description": "An AI agent on Container Apps that answers order questions with the chat model, the orders and shipping tools, and the returns specialist.",
+  "description": "An AI agent on Container Apps that answers order questions with the chat model and the commerce MCP server, which federates the orders and shipping tools and the returns specialist behind one endpoint.",
   "owner": "order-assistant-leads",
-  "models": ["chat"],
-  "tools": ["orders", "shipping", "returns"],
+  "models": [
+    "chat"
+  ],
+  "tools": [
+    "commerce"
+  ],
   "members": [
     {
       "name": "agent",

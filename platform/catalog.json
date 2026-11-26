@@ -2,27 +2,63 @@
   "models": [
     {
       "alias": "chat",
-      "description": "General-purpose chat model on Microsoft Foundry. OpenAI Chat Completions and Responses APIs."
+      "api": "openai",
+      "description": "gpt-5-mini on Microsoft Foundry, OpenAI Chat Completions and Responses APIs. Served from Sweden Central and fails over to France Central on throttling or errors. Requests with the header x-workload: batch go to France Central, keeping the primary's capacity for interactive traffic."
+    },
+    {
+      "alias": "mistral",
+      "api": "openai",
+      "description": "Mistral Large 3 on Microsoft Foundry, a second model family. OpenAI Chat Completions API."
+    },
+    {
+      "alias": "claude",
+      "api": "anthropic",
+      "optional": "Deployed only when CLAUDE_ORGANIZATION_NAME is set: Claude deployments need your organization's attestation.",
+      "description": "Claude Haiku 5.5 on Microsoft Foundry, Anthropic Messages API."
     }
   ],
   "tools": [
     {
-      "server": "orders",
-      "kind": "mcp",
-      "displayName": "Orders",
-      "description": "Look up orders and stock levels. Read-only, synthetic data, from a private MCP server."
+      "server": "commerce",
+      "displayName": "Commerce",
+      "description": "Orders, stock, shipping quotes, and the returns specialist agent behind one endpoint: three backends federated by the gateway.",
+      "backends": ["orders", "shipping", "returns"]
     },
     {
       "server": "shipping",
-      "kind": "openApi",
       "displayName": "Shipping",
-      "description": "Delivery quotes by country and service. A private REST API, published as tools from its OpenAPI description."
+      "description": "Delivery quotes by country and service. A private REST API, published as tools from its OpenAPI description.",
+      "backends": ["shipping"]
     },
     {
-      "server": "returns",
-      "kind": "mcp",
-      "displayName": "Returns specialist",
-      "description": "An agent that recommends a refund, replacement, repair, or decline for a returned item. It only recommends."
+      "server": "my-orders",
+      "displayName": "My orders",
+      "optional": "Deployed only when the Microsoft Entra apps for on-behalf-of exist (scripts/deploy.sh creates them when it can).",
+      "description": "The signed-in user's own orders. The gateway calls the backend on behalf of the user, so it only ever returns that user's data.",
+      "backends": ["my-orders"]
     }
-  ]
+  ],
+  "backends": {
+    "orders": {
+      "kind": "mcp",
+      "required": true,
+      "description": "Private MCP server: orders and stock levels. Read-only, synthetic data."
+    },
+    "shipping": {
+      "kind": "openApi",
+      "required": true,
+      "description": "Private REST API: delivery quotes, published from its OpenAPI description."
+    },
+    "returns": {
+      "kind": "mcp",
+      "required": false,
+      "description": "The returns specialist: an agent behind an MCP tool. It only recommends a refund, replacement, repair, or decline."
+    },
+    "my-orders": {
+      "kind": "mcp",
+      "required": true,
+      "onBehalfOf": true,
+      "description": "Private MCP server that accepts only user tokens that the gateway exchanged on-behalf-of."
+    }
+  }
 }

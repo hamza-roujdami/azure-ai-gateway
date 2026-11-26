@@ -8,6 +8,7 @@ from teams import GATEWAY_USER, MODELS_USER
 GATEWAY = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.ApiManagement/aigateways/gw"
 WORKSPACE = f"{GATEWAY}/workspaces/default"
 MODEL = f"{WORKSPACE}/modelProviders/foundry/models/gpt"
+BACKUP = f"{WORKSPACE}/modelProviders/foundry-backup/models/gpt"
 
 
 def policies(*types):
@@ -28,10 +29,16 @@ GOOD = {
             "aliases": [
                 {
                     "name": "chat",
-                    "properties": {"backendModels": [{"resourceId": MODEL}], **policies("costLimit")},
+                    "properties": {
+                        "backendModels": [{"resourceId": MODEL}, {"resourceId": BACKUP}],
+                        **policies("costLimit"),
+                    },
                 }
             ],
-            "models": [{"id": MODEL, "properties": policies("tokenLimit", "contentSafety")}],
+            "models": [
+                {"id": MODEL, "properties": policies("tokenLimit", "contentSafety")},
+                {"id": BACKUP, "properties": policies("tokenLimit", "contentSafety")},
+            ],
             "modelProviders": [{"name": "foundry", "properties": {"authentication": {"managedIdentity": {}}}}],
             "toolServers": [{"name": "orders", "properties": policies("requestRateLimit")}],
             "telemetryExporters": [{"name": "appinsights", "properties": {"payloadCapture": False}}],
@@ -104,3 +111,11 @@ def test_a_suspended_master_key_passes():
 def test_public_access_fails_only_when_private_is_expected():
     assert ("public-access", "PASS") in statuses(GOOD)
     assert ("public-access", "FAIL") in statuses(GOOD, expect_private=True)
+
+
+def test_an_alias_with_one_backend_warns_but_doesnt_fail():
+    snapshot = copy.deepcopy(GOOD)
+    snapshot["workspaces"][0]["aliases"][0]["properties"]["backendModels"].pop()
+    found = statuses(snapshot)
+    assert ("model-failover", "WARN") in found
+    assert ("model-limits", "PASS") in found

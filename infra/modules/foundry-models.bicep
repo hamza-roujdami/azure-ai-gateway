@@ -1,8 +1,9 @@
-// The model backend: a Microsoft Foundry account that only hosts model deployments.
+// A model backend: a Microsoft Foundry account that only hosts model deployments.
 //   - Keys are disabled: only Entra identities (the gateway's managed identity) can call it.
-//   - Public network access is disabled: it's reachable only through its private endpoint in snet-pe.
+//   - Public network access is disabled: it's reachable only through its private endpoint in snet-pe, which can be in
+//     the VNet's region even when the account is in another one.
 //   - The three Foundry private DNS zones are linked to the VNet, so the gateway resolves the usual host name to the
-//     private IP.
+//     private IP. The first account creates them; the others add their records to the same zones.
 targetScope = 'resourceGroup'
 
 param location string
@@ -11,16 +12,18 @@ param tags object = {}
 @description('Account name. Also the custom subdomain, so it must be globally unique.')
 param accountName string
 
-param modelName string
-param modelVersion string
-param deploymentName string
-param skuName string = 'GlobalStandard'
+@description('Model deployments, created one at a time: [{ name, format, model, version, capacity, sku?, modelProviderData? }].')
+param deployments array
 
-@minValue(1)
-param capacity int = 50
+@description('Create the private DNS zones and link them to the VNet. False when another account already did.')
+param createDnsZones bool = true
 
 param vnetId string
 param privateEndpointSubnetId string
+
+@description('Region of the private endpoint: the VNet\'s region.')
+param privateEndpointLocation string = location
+
 param logAnalyticsId string
 
 var dnsZoneNames = [
@@ -49,30 +52,38 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   }
 }
 
-resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
+// Foundry accepts one deployment change at a time per account, and none while the account itself is updating, which
+// the private endpoint and diagnostic settings can cause: so the deployments go last, one by one. modelProviderData is
+// the attestation that Anthropic (Claude) deployments require; other models don't take it.
+@batchSize(1)
+resource modelDeployments 'Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview' = [for d in deployments: {
   parent: account
-  name: deploymentName
+  name: d.name
+  dependsOn: [ dnsZoneGroup, diagnostics ]
   sku: {
-    name: skuName
-    capacity: capacity
+    name: d.?sku ?? 'GlobalStandard'
+    capacity: d.capacity
   }
-  properties: {
-    model: {
-      format: 'OpenAI'
-      name: modelName
-      version: modelVersion
-    }
-  }
-}
+  properties: union(
+    {
+      model: {
+        format: d.format
+        name: d.model
+        version: d.version
+      }
+    },
+    contains(d, 'modelProviderData') ? { modelProviderData: d.modelProviderData } : {}
+  )
+}]
 
-resource dnsZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [for zone in dnsZoneNames: {
+resource newZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [for zone in dnsZoneNames: if (createDnsZones) {
   name: zone
   location: 'global'
   tags: tags
 }]
 
-resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = [for (zone, i) in dnsZoneNames: {
-  parent: dnsZones[i]
+resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = [for (zone, i) in dnsZoneNames: if (createDnsZones) {
+  parent: newZones[i]
   name: 'link-${last(split(vnetId, '/'))}'
   location: 'global'
   tags: tags
@@ -84,7 +95,7 @@ resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06
 
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${accountName}'
-  location: location
+  location: privateEndpointLocation
   tags: tags
   properties: {
     subnet: { id: privateEndpointSubnetId }
@@ -103,10 +114,11 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
 resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
   parent: privateEndpoint
   name: 'default'
+  dependsOn: [ newZones ]
   properties: {
-    privateDnsZoneConfigs: [for (zone, i) in dnsZoneNames: {
+    privateDnsZoneConfigs: [for zone in dnsZoneNames: {
       name: replace(zone, '.', '-')
-      properties: { privateDnsZoneId: dnsZones[i].id }
+      properties: { privateDnsZoneId: resourceId('Microsoft.Network/privateDnsZones', zone) }
     }]
   }
 }
@@ -124,5 +136,9 @@ resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
 output accountId string = account.id
 output accountName string = account.name
 output endpoint string = account.properties.endpoint
-output deploymentId string = deployment.id
-output deploymentName string = deployment.name
+@description('{ <deployment name>: { id, model, version } }')
+output deployments object = toObject(deployments, d => d.name, d => {
+  id: '${account.id}/deployments/${d.name}'
+  model: d.model
+  version: d.version
+})

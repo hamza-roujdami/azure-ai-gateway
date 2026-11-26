@@ -20,5 +20,5 @@ pythonpath = [
 [tool.ruff.lint.isort]
 known-first-party = [
   "orders", "server", "gateway_agent", "app", "smoke", "teams", "check_gateway", "apply_baseline", "shipping",
-  "returns_agent", "summarize", "outputs", "usage_report",
+  "returns_agent", "summarize", "outputs", "usage_report", "me_server",
 ]

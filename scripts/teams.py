@@ -19,7 +19,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -59,6 +59,8 @@ GATEWAY_SCOPE = "https://ai.gateway.azure.com/.default"
 class Catalog:
     models: dict[str, str]
     tools: dict[str, str]
+    # The API each alias speaks: openai (Chat Completions, Responses) or anthropic (Messages).
+    apis: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -83,9 +85,10 @@ def load_catalog(path: Path = CATALOG_FILE) -> Catalog:
     data = json.loads(path.read_text())
     models = {m["alias"]: m.get("description", "") for m in data.get("models", [])}
     tools = {t["server"]: t.get("description", "") for t in data.get("tools", [])}
-    if len(models) != 1 or not tools:
-        raise ValueError(f"{path.name}: the templates publish exactly one model alias and at least one MCP server")
-    return Catalog(models=models, tools=tools)
+    if not models or not tools:
+        raise ValueError(f"{path.name}: the templates publish at least one model alias and one MCP server")
+    apis = {m["alias"]: m.get("api", "openai") for m in data.get("models", [])}
+    return Catalog(models=models, tools=tools, apis=apis)
 
 
 def load_budget_ceiling() -> Decimal | None:
@@ -333,8 +336,10 @@ def quickstart(team: Team, catalog: Catalog, gateway_url: str) -> str:
         "| Kind | Name | What it is | Endpoint |",
         "|---|---|---|---|",
     ]
+    routes = {"openai": "openai/v1", "anthropic": "anthropic (Messages API: /v1/messages)"}
     lines += [
-        f'| Model | `{a}` | {catalog.models[a]} | `{url}/default/models/openai/v1`, with `"model": "{a}"` |'
+        f"| Model | `{a}` | {catalog.models[a]} | "
+        f'`{url}/default/models/{routes.get(catalog.apis.get(a, "openai"), "openai/v1")}`, with `"model": "{a}"` |'
         for a in team.models
     ]
     lines += [f"| MCP server | `{s}` | {catalog.tools[s]} | `{url}/default/toolservers/{s}/mcp` |" for s in team.tools]
@@ -344,8 +349,9 @@ def quickstart(team: Team, catalog: Catalog, gateway_url: str) -> str:
         "identity in Azure. Calls to anything else on the gateway return `403`.",
         "",
     ]
-    if team.models:
-        alias = team.models[0]
+    openai_models = [a for a in team.models if catalog.apis.get(a, "openai") == "openai"]
+    if openai_models:
+        alias = openai_models[0]
         lines += [
             "## Call a model",
             "",

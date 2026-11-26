@@ -1,10 +1,11 @@
 // Publishes one MCP server on the gateway, with a per-caller request rate limit, and grants AI Gateway Tools User on
-// this MCP server only, to the callers from the team files. Its backend is either
-//   - a remote MCP server (Streamable HTTP):        source = { kind: 'mcp', url }
-//   - a REST API described by OpenAPI:              source = { kind: 'openApi', specBase64 }
+// this MCP server only, to the callers from the team files. The server federates one or more backends, each under
+// its own namespace, so clients see <namespace>_<tool>:
+//   - a remote MCP server (Streamable HTTP):   { namespace, kind: 'mcp', url, required, authentication? }
+//   - a REST API described by OpenAPI:         { namespace, kind: 'openApi', specBase64, required }
 //     The gateway turns each operation into a tool and calls the API at the spec's servers[0].url.
-// Clients connect to https://<gateway-host>/default/toolservers/<serverName>/mcp and see <namespace>_<tool>.
-// The backends here are private and accept only the gateway's subnet, so the gateway sends them no credentials.
+// A required backend that's down fails tool discovery; an optional one is left out of the list.
+// Clients connect to https://<gateway-host>/default/toolservers/<serverName>/mcp.
 targetScope = 'resourceGroup'
 
 import { caller } from 'types.bicep'
@@ -20,10 +21,8 @@ param displayName string
 @description('Helps people and agents understand what the tools do.')
 param serverDescription string
 
-param namespace string = serverName
-
-@description('{ kind: \'mcp\', url } or { kind: \'openApi\', specBase64 }.')
-param source object
+@description('The backends this MCP server federates.')
+param backends array
 
 @minValue(1)
 param callsPerMinutePerCaller int = 60
@@ -33,26 +32,17 @@ param callers caller[] = []
 
 var toolsUserRoleId = 'dce03f8d-857f-4e40-a90d-67770fa6ecd2'
 
-var mcpEndpoint = {
-  namespace: namespace
-  kind: 'mcp'
-  mode: 'failClosed'
-  mcp: {
-    endpoint: { url: source.?url ?? '' }
-    transport: 'streamableHttp'
-  }
-}
-var openApiEndpoint = {
-  namespace: namespace
-  kind: 'openApi'
-  mode: 'failClosed'
-  openApi: {
-    specSource: {
-      type: 'inline'
-      contentBase64: source.?specBase64 ?? ''
-    }
-  }
-}
+var endpoints = map(backends, b => union(
+  {
+    namespace: b.namespace
+    kind: b.kind
+    mode: b.required ? 'failClosed' : 'failOpen'
+  },
+  b.kind == 'openApi'
+    ? { openApi: { specSource: { type: 'inline', contentBase64: b.specBase64 } } }
+    : { mcp: { endpoint: { url: b.url }, transport: 'streamableHttp' } },
+  contains(b, 'authentication') ? { authentication: b.authentication } : {}
+))
 
 #disable-next-line BCP081
 resource gateway 'Microsoft.ApiManagement/aigateways@2026-11-01' existing = {
@@ -72,8 +62,8 @@ resource toolServer 'Microsoft.ApiManagement/aigateways/workspaces/toolServers@2
   properties: {
     displayName: displayName
     description: serverDescription
-    toolServerType: source.kind
-    endpoints: [ source.kind == 'openApi' ? openApiEndpoint : mcpEndpoint ]
+    toolServerType: 'mcp'
+    endpoints: endpoints
     policies: [
       {
         type: 'requestRateLimit'

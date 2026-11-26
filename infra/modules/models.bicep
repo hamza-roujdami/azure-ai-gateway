@@ -1,19 +1,21 @@
-// Publishes the Foundry deployment through the gateway:
-//   provider  'foundry'   signs in to Foundry with the gateway's managed identity (no key)
-//   model     per-caller token limit + content safety on prompts and responses
-//   alias     'chat'      the stable name apps send in the "model" field, with a daily cost limit per caller
-//   roles     AI Gateway Models User on the alias only (least privilege), for each caller from the team files
+// Publishes the Foundry deployments through the gateway:
+//   providers  one per Foundry account; each signs in with the gateway's managed identity (no keys)
+//   models     one backend model per deployment, each with a per-caller token limit and content safety
+//   aliases    the stable names apps send in the "model" field, each with a daily cost limit per caller. An alias can
+//              route across backends by priority, skip a backend with a CEL condition, and fail over on errors.
+//   roles      AI Gateway Models User on each alias only (least privilege), for each caller from the team files
 targetScope = 'resourceGroup'
 
-import { caller } from 'types.bicep'
-
 param gatewayName string
-param foundryEndpoint string
-param foundryAccountId string
-param deploymentId string
-param modelName string
-param modelVersion string
-param aliasName string = 'chat'
+
+@description('[{ name, displayName, endpoint, accountId }]: one model provider per Foundry account.')
+param providers array
+
+@description('[{ name, provider, deploymentId, deploymentName, version, endpoints }]: the backend models.')
+param models array
+
+@description('[{ name, description, backends: [{ model, priority, when? }], failover }]. model is <provider>/<model>.')
+param aliases array
 
 @minValue(1)
 param tokensPerMinutePerCaller int = 150000
@@ -21,17 +23,26 @@ param tokensPerMinutePerCaller int = 150000
 @allowed([ 'None', 'Low', 'Medium', 'High' ])
 param contentSafetySeverity string = 'Medium'
 
-@description('Estimated spend each caller can use per day on the alias, in US dollars, as a string for decimals.')
+@description('Estimated spend each caller can use per day on each alias, in US dollars, as a string for decimals.')
 param dailyBudgetPerCallerUsd string = '5'
 
 @description('Budgets for specific identities: [{ claims, amount }]. The first match wins.')
 param costOverrides array = []
 
-@description('Callers that get AI Gateway Models User on the alias.')
-param callers caller[] = []
+@description('{ <alias>: caller[] }: the callers that get AI Gateway Models User on each alias.')
+param callers object
+
+// Backend outages only: no response, a deployment missing in that region (404), a timeout (408), a paused or locked
+// deployment (423), throttling (429), or a server error. Client errors such as a content safety 400 go back to the
+// caller: another backend wouldn't help.
+@description('A failed send that matches moves the request to the next backend.')
+param failureCondition string = '@cel(response == null || response.status_code in [404, 408, 423, 429] || response.status_code >= 500)'
+
+@description('How long a failing backend stays out of the alias, as an ISO 8601 duration.')
+param excludeFor string = 'PT30S'
 
 var modelsUserRoleId = 'a6b68e3d-a1f0-4c60-8678-237c050cf4ea'
-var endpoint = endsWith(foundryEndpoint, '/') ? foundryEndpoint : '${foundryEndpoint}/'
+var workspaceId = resourceId('Microsoft.ApiManagement/aigateways/workspaces', gatewayName, 'default')
 
 #disable-next-line BCP081
 resource gateway 'Microsoft.ApiManagement/aigateways@2026-11-01' existing = {
@@ -39,42 +50,32 @@ resource gateway 'Microsoft.ApiManagement/aigateways@2026-11-01' existing = {
 }
 
 #disable-next-line BCP081
-resource workspace 'Microsoft.ApiManagement/aigateways/workspaces@2026-11-01' existing = {
-  parent: gateway
-  name: 'default'
-}
-
-#disable-next-line BCP081
-resource provider 'Microsoft.ApiManagement/aigateways/workspaces/modelProviders@2026-11-01' = {
-  parent: workspace
-  name: 'foundry'
+resource modelProviders 'Microsoft.ApiManagement/aigateways/workspaces/modelProviders@2026-11-01' = [for p in providers: {
+  name: '${gatewayName}/default/${p.name}'
   properties: {
     modelProviderType: 'Foundry'
-    displayName: 'Foundry (private endpoint)'
+    displayName: p.displayName
     foundry: {
-      endpoint: { url: endpoint }
-      resourceIds: [ foundryAccountId ]
+      endpoint: { url: endsWith(p.endpoint, '/') ? p.endpoint : '${p.endpoint}/' }
+      resourceIds: [ p.accountId ]
     }
     authentication: {
       managedIdentity: { resource: 'https://cognitiveservices.azure.com/' }
     }
   }
-}
+}]
 
 #disable-next-line BCP081
-resource model 'Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models@2026-11-01' = {
-  parent: provider
-  name: last(split(deploymentId, '/'))
+resource backendModels 'Microsoft.ApiManagement/aigateways/workspaces/modelProviders/models@2026-11-01' = [for m in models: {
+  name: '${gatewayName}/default/${m.provider}/${m.name}'
+  dependsOn: [ modelProviders ]
   properties: {
-    displayName: modelName
-    supportedEndpoints: [
-      '/openai/v1/chat/completions'
-      '/openai/v1/responses'
-    ]
+    displayName: m.name
+    supportedEndpoints: m.endpoints
     deployment: {
-      resourceId: deploymentId
-      modelName: last(split(deploymentId, '/'))
-      modelVersion: modelVersion
+      resourceId: m.deploymentId
+      modelName: m.deploymentName
+      modelVersion: m.version
     }
     policies: [
       {
@@ -92,38 +93,56 @@ resource model 'Microsoft.ApiManagement/aigateways/workspaces/modelProviders/mod
       }
     ]
   }
-}
+}]
+
+var modelIds = toObject(models, m => '${m.provider}/${m.name}', m => '${workspaceId}/modelProviders/${m.provider}/models/${m.name}')
 
 #disable-next-line BCP081
-resource alias 'Microsoft.ApiManagement/aigateways/workspaces/aliases@2026-11-01' = {
-  parent: workspace
-  name: aliasName
-  properties: {
-    backendModels: [ { resourceId: model.id } ]
-    policies: [
-      {
-        type: 'costLimit'
-        // A stable ID: changing the amount on a later deployment keeps the spend counted so far.
-        id: guid(gateway.id, aliasName, 'costLimit')
-        amount: json(dailyBudgetPerCallerUsd)
-        period: 'day'
-        counterKey: [ 'identity' ]
-        overrides: costOverrides
-      }
-    ]
-  }
-}
+resource aliasResources 'Microsoft.ApiManagement/aigateways/workspaces/aliases@2026-11-01' = [for a in aliases: {
+  name: '${gatewayName}/default/${a.name}'
+  dependsOn: [ backendModels ]
+  properties: union(
+    {
+      description: a.description
+      backendModels: map(a.backends, b => union(
+        { resourceId: modelIds[b.model], priority: b.priority, weight: 1 },
+        contains(b, 'when') ? { when: b.when } : {}
+      ))
+      selectionOrder: [ 'priority' ]
+      policies: [
+        {
+          type: 'costLimit'
+          // A stable ID: changing the amount on a later deployment keeps the spend counted so far.
+          id: guid(gateway.id, a.name, 'costLimit')
+          amount: json(dailyBudgetPerCallerUsd)
+          period: 'day'
+          counterKey: [ 'identity' ]
+          overrides: costOverrides
+        }
+      ]
+    },
+    a.failover ? { maxRetryAttempts: 3, failures: [ { when: failureCondition, excludeFor: excludeFor } ] } : {}
+  )
+}]
 
-resource modelsUsers 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for caller in callers: {
-  scope: alias
-  name: guid(alias.id, caller.principalId, modelsUserRoleId)
+var grants = flatten(map(range(0, length(aliases)), i => map(callers[?aliases[i].name] ?? [], c => {
+  alias: i
+  scope: '${workspaceId}/aliases/${aliases[i].name}'
+  principalId: c.principalId
+  principalType: c.principalType
+  roleDefinitionId: modelsUserRoleId
+})))
+
+resource modelsUsers 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for g in grants: {
+  scope: aliasResources[g.alias]
+  name: guid(g.scope, g.principalId, modelsUserRoleId)
   properties: {
-    principalId: caller.principalId
-    principalType: caller.principalType
+    principalId: g.principalId
+    principalType: g.principalType
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', modelsUserRoleId)
   }
 }]
 
-output aliasName string = alias.name
-output aliasId string = alias.id
-output grants array = [for c in callers: { scope: alias.id, principalId: c.principalId, roleDefinitionId: modelsUserRoleId }]
+output aliasNames string[] = map(aliases, a => a.name)
+output aliasIds string[] = map(aliases, a => '${workspaceId}/aliases/${a.name}')
+output grants array = map(grants, g => { scope: g.scope, principalId: g.principalId, roleDefinitionId: g.roleDefinitionId })
