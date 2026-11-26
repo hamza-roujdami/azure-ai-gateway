@@ -30,7 +30,7 @@ CATALOG_FILE = ROOT / "platform" / "catalog.json"
 
 PRINCIPAL_TYPES = ("User", "Group", "ServicePrincipal")
 PLATFORM_PRINCIPALS = {
-    "platform:deployer": "the identity that runs scripts/deploy.sh",
+    "platform:deployer": "the developer who deploys: you with scripts/deploy.sh, DEVELOPER_PRINCIPAL_ID in the workflow",
     "platform:apps": "the user-assigned identity of this deployment's container apps",
     "platform:returns-agent": "the user-assigned identity of the returns specialist agent",
     "platform:foundry-project": "the managed identity of this deployment's Foundry project",

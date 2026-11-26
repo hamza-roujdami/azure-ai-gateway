@@ -152,10 +152,12 @@ that change teams, the platform, or the apps. It signs in with OpenID Connect, s
 GITHUB_REPO=<owner>/<repo> AZURE_ENV_NAME=aigw-demo ./scripts/setup-github-deploy.sh
 ```
 
-It creates an app registration trusted only by the repository's `azure` environment, gives it **Contributor** and
-**Role Based Access Control Administrator** on the subscription, and stores the IDs as environment variables. Until
-then the deploy job is skipped. In the pipeline, `platform:deployer` stays the developer who ran the setup, not the
-pipeline's identity.
+It creates an app registration trusted only by the repository's `azure` environment, which only `main` can use, gives
+it **Contributor** and **Role Based Access Control Administrator** on the subscription, and stores the IDs as
+variables. Until then the deploy job is skipped. In the pipeline, `platform:deployer` stays the developer who ran the
+setup, not the pipeline's identity, and the scripts sign in again with a fresh GitHub token before each phase
+([ci-login.sh](scripts/ci-login.sh)), because the first sign-in lasts only a few minutes. To remove the pipeline's
+access, delete the app registration: `az ad app delete --id <AZURE_CLIENT_ID>`.
 
 ## Security
 
@@ -191,7 +193,7 @@ clients/          AI app (support-desk), AI agent (aca-agent), Foundry prompt ag
 tools/            orders MCP server (mcp-server), shipping REST API (shipping-api)
 agents/           returns specialist agent (returns-agent)
 scripts/          deploy, test, teardown; teams.py, check_gateway.py, apply_baseline.py, usage_report.py;
-                  copilot-with-gateway.sh, setup-github-deploy.sh
+                  copilot-with-gateway.sh, setup-github-deploy.sh, ci-login.sh
 docs/             demo.md: a 20-minute walkthrough for customer conversations
 tests/            unit tests (pytest)
 ```
