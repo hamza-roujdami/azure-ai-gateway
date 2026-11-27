@@ -11,7 +11,7 @@ type caller = {
 @description('A principal that a team onboards.')
 type teamMember = {
   name: string
-  @description('Object ID, or platform:deployer, platform:apps or platform:foundry-project.')
+  @description('Object ID, or platform:deployer, platform:apps, platform:returns-agent, platform:foundry-project or platform:hosted-agent.')
   principalId: string
   principalType: ('User' | 'Group' | 'ServicePrincipal')
   @description('Daily budget for this identity in US dollars, as a string so that it can hold decimals.')

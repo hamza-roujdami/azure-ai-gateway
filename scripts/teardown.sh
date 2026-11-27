@@ -21,5 +21,7 @@ for app in $apps; do
   az ad app delete --id "$app" 2>/dev/null && echo "Deleted the Entra app $app." ||
     echo "Couldn't delete the Entra app $app: ask an identity administrator to." >&2
 done
+# The Foundry hosted agent went with the resource group; forget its local azd environment too.
+rm -rf "agents/hosted-order-assistant/.azure/${AZURE_RESOURCE_GROUP#rg-}"
 rm -f .env
 echo "Deleted."

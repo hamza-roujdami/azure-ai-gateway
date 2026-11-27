@@ -38,6 +38,7 @@ Open [teams/](../teams/). Each file is a team: its members, the models and tools
 | `order-assistant` | AI agent | `chat`, `commerce` |
 | `returns-specialist` | An agent behind a tool, as its own identity | `chat` |
 | `foundry-agents` | Foundry prompt agents | `chat` |
+| `foundry-hosted-agents` | A Foundry hosted agent, as its own Entra Agent ID | `chat`, `commerce` |
 | `support-desk` | AI app | `chat` |
 | `coding-agents` | Coding agents | `chat`, `mistral`, `shipping` |
 | `employees` | Users | `my-orders` |
@@ -126,8 +127,21 @@ az containerapp job logs show -n "$AGENT_SMOKE_JOB" -g "$AZURE_RESOURCE_GROUP" -
 > API, and `returns_*` from a specialist agent. The agent connects once. The returns specialist reasons with the model
 > through the gateway as its own identity, with its own team file and budget, and can only recommend.
 
-Then a Foundry prompt agent, which has no model deployment: it uses the gateway's model through the project's
-connection.
+Then the same assistant as a **Foundry hosted agent**: its code runs on Foundry Agent Service, the project has no
+model deployment, and it calls `chat` and `commerce` through the gateway as its own Microsoft Entra Agent ID.
+
+```bash
+cd agents/hosted-order-assistant
+azd ai agent invoke hosted-order-assistant "What is the status of order 1001?"
+cd ../..
+```
+
+> The agent's identity only exists once Foundry deploys it, and the gateway answered `403` until
+> [teams/foundry-hosted-agents.json](../teams/foundry-hosted-agents.json) granted it. Every agent, wherever it runs,
+> is onboarded the same way, with its own budget. Press `F5` in VS Code to step through it locally in the Agent
+> Inspector.
+
+Then a Foundry prompt agent, which has no code at all: it uses the gateway's model through the project's connection.
 
 ```bash
 python clients/foundry-agent/agent.py "In one sentence, why use an AI gateway?"

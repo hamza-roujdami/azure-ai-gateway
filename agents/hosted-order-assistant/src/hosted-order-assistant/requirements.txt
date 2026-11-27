@@ -1,0 +1,9 @@
+# Agent Framework 1.22 with mcp 1.30, the versions this repository's other agent runs against the gateway: mcp 2.x
+# negotiates an MCP protocol version that the gateway's MCP servers reject (Microsoft's AI Gateway lab 16).
+agent-framework-core==1.22.0
+agent-framework-openai==1.17.0
+agent-framework-foundry-hosting==1.0.0b261015
+mcp==1.30.0
+azure-identity==1.27.0
+python-dotenv==1.2.4
+debugpy==1.8.22

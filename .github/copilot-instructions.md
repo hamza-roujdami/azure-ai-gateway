@@ -35,8 +35,8 @@ subscription or personal identifiers in any file.
   specialist agent with its own identity); keyless clients for the three workload types; the usage report by team;
   the OIDC deploy workflow; failover across two Foundry regions with a CEL condition (labs 27, 29); a second model
   family (`mistral`) and an optional `claude` alias; the federated `commerce` MCP server (lab 04); the `my-orders`
-  on-behalf-of tool for users (lab 33). **Next ideas:** a Foundry hosted agent (lab 16), managed-identity
-  authentication for the other MCP sources, Agent 365 and agent hooks (labs 19, 20, 30). Don't claim
+  on-behalf-of tool for users (lab 33); a Foundry hosted agent (lab 16) as its own Entra Agent ID. **Next ideas:**
+  managed-identity authentication for the other MCP sources, Agent 365 and agent hooks (labs 19, 20, 30). Don't claim
   "production-ready" until the matching test passes.
 
 ## Architecture (see README.md)
@@ -90,6 +90,17 @@ subscription or personal identifiers in any file.
   - `clients/aca-agent`: Agent Framework + FastAPI, user-assigned identity, environment-only ingress, one MCP tool per
     server in `AI_GATEWAY_MCP_SERVERS` (`commerce`), plus the `agent-smoke` job.
   - `clients/foundry-agent`: a prompt agent using the project's gateway connection; model `ai-gateway/chat`.
+  - `agents/hosted-order-assistant`: a Foundry hosted agent (azd project: `azure.yaml`, code deploy,
+    `remote_build`, Responses protocol) in the repository's Foundry project, with no model deployments. It calls
+    `chat` and `commerce` directly through the gateway as its Entra Agent ID (`platform:hosted-agent`, in
+    `teams/foundry-hosted-agents.json`), not through a Foundry toolbox: per-agent roles and limits instead of the
+    project's identity. `scripts/deploy-hosted-agent.sh` creates the azd environment from `.env` (no `azd ai agent
+    init`), runs `azd deploy`, and prints `AGENT_<SERVICE>_INSTANCE_IDENTITY_PRINCIPAL_ID`; `deploy.sh` phase 3
+    passes it to Bicep as `hostedAgentPrincipalId`. When the agent isn't redeployed (CI, `SKIP_HOSTED_AGENT`), the
+    previous run's parameter is read **before phase 1**, which replaces it: reading it later returns '' and prune
+    then revokes the agent's roles.
+    Pinned to `agent-framework-foundry-hosting` 1.0.0b261015, the last release with core 1.22 and mcp < 2.
+    `.vscode/` runs it under debugpy with the Agent Inspector (`F5`).
   - `scripts/copilot-with-gateway.sh`: Copilot CLI with `COPILOT_PROVIDER_BEARER_TOKEN` (an Entra token for
     `Data.All`, which on-behalf-of tools need) and `--additional-mcp-config` for the granted MCP servers; `-m claude`
     uses `COPILOT_PROVIDER_TYPE=anthropic` and `/default/models/anthropic`. Not mistral: through the gateway, Mistral
@@ -128,6 +139,9 @@ subscription or personal identifiers in any file.
 - **Foundry deployments fail while the account is `Accepted`** (updating, for example after private endpoint or
   diagnostic changes): they depend on those, and run one at a time.
 - **Don't edit `scripts/deploy.sh` while it runs:** bash reads scripts as it goes.
+- **`azd ai agent init` can't read the microsoft-foundry/foundry-samples repository** when the `gh` token isn't SAML
+  authorized for that organization; the sample catalog also lists samples that were removed (03-mcp). Fetch a sample
+  anonymously and init from the local `azure.yaml` (`-t <path>`).
 - **Reference material:** Microsoft's labs in github.com/Azure/aigateway (04 federation, 18 private networking, 21
   enterprise reference, 27 conditions, 29 failover, 32 Foundry connection, 33 on-behalf-of). Check them before
   changing resource shapes.

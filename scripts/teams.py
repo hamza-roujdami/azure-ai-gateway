@@ -34,9 +34,15 @@ PLATFORM_PRINCIPALS = {
     "platform:apps": "the user-assigned identity of this deployment's container apps",
     "platform:returns-agent": "the user-assigned identity of the returns specialist agent",
     "platform:foundry-project": "the managed identity of this deployment's Foundry project",
+    "platform:hosted-agent": "the Entra Agent ID of this deployment's Foundry hosted agent",
 }
 # Managed identities are service principals. The deployer's type comes from the deployment (AZURE_PRINCIPAL_TYPE).
-PLATFORM_SERVICE_PRINCIPALS = {"platform:apps", "platform:returns-agent", "platform:foundry-project"}
+PLATFORM_SERVICE_PRINCIPALS = {
+    "platform:apps",
+    "platform:returns-agent",
+    "platform:foundry-project",
+    "platform:hosted-agent",
+}
 TEAM_KEYS = {"$schema", "name", "description", "owner", "models", "tools", "members"}
 MEMBER_KEYS = {"name", "principalId", "principalType", "dailyBudgetUsd"}
 TEAM_NAME = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")

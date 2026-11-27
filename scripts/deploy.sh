@@ -3,11 +3,12 @@
 #   1. infrastructure (network, two Foundry accounts, gateway, models and aliases, Foundry project, registry,
 #      Container Apps environment)
 #   2. the Microsoft Entra apps for tools that act as the signed-in user (on-behalf-of), when you can create them
-#   3. builds the images in the registry (az acr build, no local Docker needed)
-#   4. the container apps, and the MCP servers from platform/catalog.json behind the gateway
-#   5. removes runtime roles that no team file grants, and suspends the built-in all-access key
-#   6. the gateway-wide baseline policies
-#   7. the gateway's OpenTelemetry exporter to Application Insights
+#   3. the Foundry hosted agent (agents/hosted-order-assistant), with azd, and its Entra Agent ID for the team files
+#   4. builds the images in the registry (az acr build, no local Docker needed)
+#   5. the container apps, and the MCP servers from platform/catalog.json behind the gateway
+#   6. removes runtime roles that no team file grants, and suspends the built-in all-access key
+#   7. the gateway-wide baseline policies
+#   8. the gateway's OpenTelemetry exporter to Application Insights
 # Who can call what comes from the team files in teams/. Then writes the outputs to .env for scripts/test.sh.
 #
 #   AZURE_ENV_NAME=aigw-demo AZURE_LOCATION=swedencentral ./scripts/deploy.sh
@@ -15,6 +16,7 @@
 #   CLAUDE_ORGANIZATION_NAME="Contoso Ltd" CLAUDE_COUNTRY_CODE=AE CLAUDE_INDUSTRY=retail ./scripts/deploy.sh
 #                                         # adds the claude alias: Foundry sends this attestation to Anthropic
 #   SKIP_ENTRA_APPS=true ./scripts/deploy.sh  # don't create Entra apps; my-orders is skipped unless they exist
+#   SKIP_HOSTED_AGENT=true ./scripts/deploy.sh  # don't deploy the Foundry hosted agent (needs azd)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -64,7 +66,13 @@ deploy() {
 }
 output() { python3 scripts/outputs.py "$AZURE_ENV_NAME" "$1"; }
 
-echo "== 1/7 Infrastructure (about 10 minutes)"
+# The hosted agent's Entra Agent ID from the previous run, read before phase 1 replaces that deployment's parameters:
+# without it, phase 1 and a run that doesn't redeploy the agent (GitHub Actions) would drop the agent's access.
+REQUESTED_HOSTED_AGENT_PRINCIPAL_ID="${HOSTED_AGENT_PRINCIPAL_ID:-}"
+export HOSTED_AGENT_PRINCIPAL_ID="${HOSTED_AGENT_PRINCIPAL_ID:-$(az deployment sub show -n "$AZURE_ENV_NAME" \
+  --query properties.parameters.hostedAgentPrincipalId.value -o tsv 2>/dev/null || true)}"
+
+echo "== 1/8 Infrastructure (about 10 minutes)"
 DEPLOY_APPS=false deploy
 RG="$(output AZURE_RESOURCE_GROUP)"
 ACR="$(output ACR_NAME)"
@@ -72,7 +80,7 @@ GATEWAY="$(output AI_GATEWAY_NAME)"
 GATEWAY_ID="$(output AI_GATEWAY_ID)"
 
 relogin
-echo "== 2/7 Microsoft Entra apps for tools that act as the signed-in user (infra/entra)"
+echo "== 2/8 Microsoft Entra apps for tools that act as the signed-in user (infra/entra)"
 # It creates two app registrations that pre-authorize each other, so no tenant-wide consent is needed: permission to
 # register applications is enough. When you're signed in as a user, it runs (and is idempotent); otherwise, for
 # example in GitHub Actions, the app IDs come from its last run. Without them, the my-orders MCP server is skipped.
@@ -97,7 +105,24 @@ export ON_BEHALF_OF_BACKEND_APP_ID="${ON_BEHALF_OF_BACKEND_APP_ID:-}"
 export ON_BEHALF_OF_TOKEN_EXCHANGE_APP_ID="${ON_BEHALF_OF_TOKEN_EXCHANGE_APP_ID:-}"
 
 relogin
-echo "== 3/7 Building images in $ACR"
+echo "== 3/8 Foundry hosted agent (agents/hosted-order-assistant)"
+# Its Entra Agent ID only exists after Foundry deploys the agent, so the team files can grant it access in this same
+# pass. azd needs a user sign-in with Foundry User on the project; elsewhere, for example in GitHub Actions, the
+# agent's code isn't redeployed and its ID from the previous run is kept.
+if [[ -z "$REQUESTED_HOSTED_AGENT_PRINCIPAL_ID" && "${SKIP_HOSTED_AGENT:-false}" != "true" &&
+  "$(az account show --query user.type -o tsv)" == "user" ]] && command -v azd >/dev/null; then
+  HOSTED_AGENT_PRINCIPAL_ID="$(AZURE_RESOURCE_GROUP="$RG" AI_GATEWAY_URL="$(output AI_GATEWAY_URL)" \
+    FOUNDRY_AGENTS_ACCOUNT="$(output FOUNDRY_AGENTS_ACCOUNT)" FOUNDRY_PROJECT_ENDPOINT="$(output FOUNDRY_PROJECT_ENDPOINT)" \
+    ./scripts/deploy-hosted-agent.sh | tail -1)"
+elif [[ -n "$HOSTED_AGENT_PRINCIPAL_ID" ]]; then
+  echo "Kept the hosted agent's Entra Agent ID from the previous run; its code wasn't redeployed."
+else
+  echo "Skipped: the hosted agent isn't deployed yet."
+fi
+export HOSTED_AGENT_PRINCIPAL_ID
+
+relogin
+echo "== 4/8 Building images in $ACR"
 export IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
 az acr build -r "$ACR" -t "mcp-server:$IMAGE_TAG" tools/mcp-server -o none
 az acr build -r "$ACR" -t "shipping-api:$IMAGE_TAG" tools/shipping-api -o none
@@ -105,23 +130,23 @@ az acr build -r "$ACR" -t "returns-agent:$IMAGE_TAG" agents/returns-agent -o non
 az acr build -r "$ACR" -t "aca-agent:$IMAGE_TAG" clients/aca-agent -o none
 
 relogin
-echo "== 4/7 Container apps and the MCP servers behind the gateway"
+echo "== 5/8 Container apps and the MCP servers behind the gateway"
 DEPLOY_APPS=true deploy
 
 relogin
-echo "== 5/7 Access: runtime roles that no team file grants, and the built-in all-access key"
+echo "== 6/8 Access: runtime roles that no team file grants, and the built-in all-access key"
 python3 scripts/teams.py prune "$AZURE_ENV_NAME" --apply
 # Every gateway has a built-in key named master that can call every model and tool. Callers here use Entra ID only.
 az aigateway api-key update -g "$RG" --gateway-name "$GATEWAY" -n master --state suspended -o none
 echo "Suspended the built-in master key."
 
 relogin
-echo "== 6/7 Gateway-wide baseline policies (platform/baseline-policies.json)"
+echo "== 7/8 Gateway-wide baseline policies (platform/baseline-policies.json)"
 python3 scripts/apply_baseline.py "$GATEWAY_ID" > /dev/null
 echo "Applied."
 
 relogin
-echo "== 7/7 Gateway telemetry"
+echo "== 8/8 Gateway telemetry"
 RG="$RG" GATEWAY="$GATEWAY" APP_INSIGHTS_NAME="$(output APPLICATION_INSIGHTS_NAME)" \
   infra/scripts/connect-telemetry.sh
 

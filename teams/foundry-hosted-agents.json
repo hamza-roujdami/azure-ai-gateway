@@ -1,0 +1,20 @@
+{
+  "$schema": "../platform/team.schema.json",
+  "name": "foundry-hosted-agents",
+  "description": "A Foundry hosted agent (agents/hosted-order-assistant): its code runs on Foundry, and it calls the chat model and the commerce MCP server through the gateway as its own Entra Agent ID, with its own budget. The Foundry project has no model deployments.",
+  "owner": "foundry-agents-leads",
+  "models": [
+    "chat"
+  ],
+  "tools": [
+    "commerce"
+  ],
+  "members": [
+    {
+      "name": "agent",
+      "principalId": "platform:hosted-agent",
+      "principalType": "ServicePrincipal",
+      "dailyBudgetUsd": 5
+    }
+  ]
+}

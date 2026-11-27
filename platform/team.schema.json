@@ -50,9 +50,9 @@
           "pattern": "^[a-z][a-z0-9-]*$"
         },
         "principalId": {
-          "description": "Object ID of the user, group, or service principal (for a managed identity, its principal ID). platform:deployer, platform:apps, platform:returns-agent, and platform:foundry-project refer to identities that this deployment creates or uses; the deployment sets their principal type.",
+          "description": "Object ID of the user, group, or service principal (for a managed identity, its principal ID). platform:deployer, platform:apps, platform:returns-agent, platform:foundry-project, and platform:hosted-agent refer to identities that this deployment creates or uses; the deployment sets their principal type.",
           "type": "string",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|platform:(deployer|apps|returns-agent|foundry-project))$"
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|platform:(deployer|apps|returns-agent|foundry-project|hosted-agent))$"
         },
         "principalType": { "enum": ["User", "Group", "ServicePrincipal"] },
         "dailyBudgetUsd": {
@@ -68,7 +68,7 @@
         },
         {
           "if": {
-            "properties": { "principalId": { "enum": ["platform:apps", "platform:returns-agent", "platform:foundry-project"] } },
+            "properties": { "principalId": { "enum": ["platform:apps", "platform:returns-agent", "platform:foundry-project", "platform:hosted-agent"] } },
             "required": ["principalId"]
           },
           "then": { "properties": { "principalType": { "const": "ServicePrincipal" } } }

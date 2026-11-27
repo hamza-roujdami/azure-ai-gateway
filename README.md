@@ -22,7 +22,7 @@ Diagram: Microsoft Learn, [What is AI Gateway?][overview]. What this repo deploy
 |---|---|
 | **Users** | An employee asks for their own orders from any MCP client. The `my-orders` tool runs as that user (on-behalf-of), so the backend only ever sees and returns their data |
 | **AI apps** | A support desk app that summarizes a ticket with one model call ([clients/support-desk](clients/support-desk)) |
-| **AI agents** | An order assistant on Agent Framework in internal Container Apps ([clients/aca-agent](clients/aca-agent)), and a Foundry Agent Service prompt agent ([clients/foundry-agent](clients/foundry-agent)) |
+| **AI agents** | An order assistant on Agent Framework in internal Container Apps ([clients/aca-agent](clients/aca-agent)); the same assistant as a **Foundry hosted agent**, whose code runs on Foundry and calls the gateway as its own Entra Agent ID ([agents/hosted-order-assistant](agents/hosted-order-assistant)); and a Foundry Agent Service prompt agent ([clients/foundry-agent](clients/foundry-agent)) |
 | **Coding agents** | GitHub Copilot CLI using the gateway's models and MCP tools, signed in as the developer ([scripts/copilot-with-gateway.sh](scripts/copilot-with-gateway.sh)) |
 | **Azure AI Gateway** | One gateway: Microsoft Entra ID only, private routing to the backends, three model aliases, and three MCP servers |
 | **Model providers** | Two Microsoft Foundry accounts with keys and public access off, reached over private endpoints. `chat` (`gpt-5-mini`) prefers Sweden Central and **fails over to France Central** when the primary is throttled, missing, paused, or failing; a **CEL condition** sends `x-workload: batch` traffic straight to France Central. `mistral` (Mistral Large 3) is a second model family. `claude` (Anthropic Messages API) is optional |
@@ -66,7 +66,8 @@ This repo does:
 
 You need: an Azure subscription where you're **Owner** (the templates assign roles), the Azure CLI 2.75 or later, the
 [aigateway extension][cli], and Python 3.13. Optional: [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli),
-for the coding agent check. Use a region with Azure AI Gateway, `gpt-5-mini`, and Mistral Large 3 (default: Sweden
+for the coding agent check, and the [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
+with `azd extension install microsoft.foundry`, for the Foundry hosted agent. Use a region with Azure AI Gateway, `gpt-5-mini`, and Mistral Large 3 (default: Sweden
 Central), and a backup region with `gpt-5-mini` (default: France Central, `AZURE_BACKUP_LOCATION`).
 
 For `my-orders`, `deploy.sh` also creates two Microsoft Entra app registrations ([infra/entra](infra/entra)), which needs
@@ -96,6 +97,7 @@ python3 -m venv .venv && source .venv/bin/activate && pip install -r requirement
 | AI agent | A Container Apps job asks the order assistant a question that needs all three backends of the federated `commerce` server |
 | Coding agent | Copilot CLI answers from the `shipping` tools, through the gateway's model |
 | Foundry agent | A prompt agent answers through the project's gateway connection |
+| Foundry hosted agent | The hosted agent answers an order question from the `commerce` tools, as its own Entra Agent ID |
 
 ## Onboard a team
 
@@ -128,7 +130,9 @@ Each team is one file in [teams/](teams/): who is in it, the model aliases and M
 Budgets are estimated spend per identity per day on each model alias ([lab 07][lab07]). Members of a group can't share one budget, so give
 each app its own identity; `teams.py` rejects budgets on groups and budgets above the gateway-wide ceiling. The example
 files onboard this deployment's identities through `platform:` references: `platform:apps` (the order assistant),
-`platform:returns-agent`, `platform:foundry-project`, and `platform:deployer` (you). [employees.json](teams/employees.json)
+`platform:returns-agent`, `platform:foundry-project`, `platform:hosted-agent` (the hosted agent's Entra Agent ID, which
+exists only after Foundry deploys it: `deploy.sh` deploys the agent first, in the same run), and `platform:deployer`
+(you). [employees.json](teams/employees.json)
 grants `my-orders` to people: in production, put a group of users there.
 
 ## Build on the gateway
@@ -143,6 +147,7 @@ laptop, a managed identity in Azure. There are no keys. Tools that act as you ne
 | AI app | `python clients/support-desk/summarize.py "<ticket>"` (`AI_GATEWAY_MODEL=mistral` for the other family) | The `chat` alias |
 | AI agent | `python clients/aca-agent/ask.py "<question>"` (needs the order-assistant access), or the `agent-smoke` job | `chat`, then the `commerce` MCP server: `orders_*`, `shipping_*`, and `returns_*` tools |
 | Foundry agent | `python clients/foundry-agent/agent.py "<question>"` | `ai-gateway/chat` through the project's connection |
+| Foundry hosted agent | `cd agents/hosted-order-assistant && azd ai agent invoke hosted-order-assistant "<question>"`, or `F5` in VS Code to run it locally | `chat` and `commerce`, as its Entra Agent ID |
 | Coding agent | `./scripts/copilot-with-gateway.sh [-m claude] shipping` | `chat` (or `claude`, when deployed) as Copilot's model, and the `shipping` tools |
 | Any OpenAI SDK | `base_url = <gateway>/default/models/openai/v1`, `model = "chat"` or `"mistral"` | |
 | Any Anthropic SDK | `base_url = <gateway>/default/models/anthropic`, `model = "claude"` (when deployed) | |
@@ -223,10 +228,12 @@ infra/entra/      Bicep (Microsoft Graph): the Entra apps for on-behalf-of, an i
 platform/         catalog.json (the published aliases, MCP servers, and their backends), team.schema.json, baseline-policies.json
 teams/            one file per team: who can call which assets, and their budgets
 clients/          AI app (support-desk), AI agent (aca-agent), Foundry prompt agent (foundry-agent)
+agents/           returns specialist agent (returns-agent); Foundry hosted agent (hosted-order-assistant, azd)
 tools/            orders and my-orders MCP servers (mcp-server), shipping REST API (shipping-api)
-agents/           returns specialist agent (returns-agent)
-scripts/          deploy, test, teardown; teams.py, check_gateway.py, apply_baseline.py, usage_report.py;
-                  copilot-with-gateway.sh, mcp_call.py, demo-failover.sh, setup-github-deploy.sh, ci-login.sh
+scripts/          deploy, deploy-hosted-agent, test, teardown; teams.py, check_gateway.py, apply_baseline.py,
+                  usage_report.py; copilot-with-gateway.sh, mcp_call.py, demo-failover.sh, setup-github-deploy.sh,
+                  ci-login.sh
+.vscode/          F5: run the hosted agent locally with the Foundry Toolkit Agent Inspector
 docs/             demo.md: a 20-minute walkthrough for customer conversations
 tests/            unit tests (pytest)
 ```
@@ -251,7 +258,10 @@ tests/            unit tests (pytest)
 - **Previewing access:** `az deployment what-if` can't list the gateway's assets or role assignments, because they
   depend on values from the same deployment. Review the `teams.py diff` summary instead.
 - **Not covered here:** Microsoft Agent 365 governance, tool threat protection, and agent hooks ([labs 19, 20,
-  30][labs]); Model Router ([lab 28][labs]); Foundry hosted agents ([lab 16][labs]).
+  30][labs]); Model Router ([lab 28][labs]).
+- **Foundry hosted agent:** deployed with azd when you run `deploy.sh` signed in as a user. In GitHub Actions, the
+  pipeline keeps the agent's last version and re-grants its Entra Agent ID from the previous deployment; to ship new
+  agent code, run `scripts/deploy-hosted-agent.sh`. It calls the gateway's public endpoint, so it needs `hybrid` mode.
 - **Claude:** optional and not part of the tested reference deployment, because it needs your organization's
   attestation to Anthropic.
 - **Mistral Large 3 and streamed tool calls:** through the gateway, its streamed responses with tool calls come back
@@ -268,7 +278,8 @@ tests/            unit tests (pytest)
   [Azure AI Gateway documentation](https://ai.gateway.azure.com/docs)
 - [Azure AI Gateway GA announcement][ga] and the [official labs][labs]: this repo follows labs [18][lab18] (private
   networking), [21][lab21] (enterprise reference), [32][lab32] (Foundry gateway connection), [04][lab04] (federated
-  MCP), [27][lab27] (conditional routing), [29][lab29] (failover), and [33][lab33] (on-behalf-of), and builds the
+  MCP), [16][lab16] (Foundry hosted agent), [27][lab27] (conditional routing), [29][lab29] (failover), and [33][lab33]
+  (on-behalf-of), and builds the
   multi-team access model on labs [07][lab07] (cost budgets), [09][lab09] (baselines), [10][lab10] (API keys),
   [11][lab11] (Entra ID and RBAC), [14][lab14] (OpenTelemetry chargeback), and [24][lab24] (GitHub Copilot)
 - [Bring your own model to Foundry Agent Service, private gateway networking][byom]
@@ -284,6 +295,7 @@ tests/            unit tests (pytest)
 [lab10]: https://github.com/Azure/aigateway/tree/main/labs/10-api-keys
 [lab11]: https://github.com/Azure/aigateway/tree/main/labs/11-entra-rbac
 [lab14]: https://github.com/Azure/aigateway/tree/main/labs/14-otel-chargeback
+[lab16]: https://github.com/Azure/aigateway/tree/main/labs/16-foundry-hosted-agent
 [lab18]: https://github.com/Azure/aigateway/tree/main/labs/18-private-networking
 [lab21]: https://github.com/Azure/aigateway/tree/main/labs/21-enterprise-reference
 [lab24]: https://github.com/Azure/aigateway/tree/main/labs/24-github-copilot-byok

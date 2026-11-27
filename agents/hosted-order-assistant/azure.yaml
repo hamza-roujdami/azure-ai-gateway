@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+# A Foundry hosted agent behind the AI gateway (Microsoft's AI Gateway lab 16, with this repository's access model).
+# The Foundry project has no model deployments and the agent holds no keys: it calls the gateway's chat alias and its
+# commerce MCP server with its own Microsoft Entra Agent ID, which teams/foundry-hosted-agents.json grants access to.
+# scripts/deploy.sh deploys it with azd into the repository's Foundry project, or run, from this folder:
+#   azd ai agent init --project-id <Foundry project resource ID>     (once, to create the azd environment)
+#   azd env set AI_GATEWAY_URL <gateway URL> && azd deploy
+requiredVersions:
+  azd: '>=1.27.1'
+  extensions:
+    azure.ai.agents: '>=1.0.0'
+name: hosted-order-assistant
+services:
+  # The existing Foundry project, from AZURE_AI_PROJECT_ID in the azd environment. No model deployments: models come
+  # from the gateway.
+  ai-project:
+    host: azure.ai.project
+  hosted-order-assistant:
+    host: azure.ai.agent
+    project: src/hosted-order-assistant
+    language: python
+    codeConfiguration:
+      dependencyResolution: remote_build
+      runtime: python_3_13
+      entryPoint: main.py
+    uses:
+      - ai-project
+    kind: hosted
+    name: hosted-order-assistant
+    description: Answers order questions with the gateway's chat model and commerce tools, as its own Entra Agent ID.
+    protocols:
+      - protocol: responses
+        version: 2.0.0
+    env:
+      PYTHONNOUSERSITE: "1"
+      AI_GATEWAY_URL: ${AI_GATEWAY_URL}
+      AI_GATEWAY_MODEL: chat
+      AI_GATEWAY_TOOLS: commerce
+    container:
+      resources:
+        cpu: '0.5'
+        memory: 1Gi
+infra:
+  provider: microsoft.foundry

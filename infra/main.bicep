@@ -87,6 +87,9 @@ param onBehalfOfBackendAppId string = ''
 @description('App ID of the token exchange app (infra/entra).')
 param onBehalfOfTokenExchangeAppId string = ''
 
+@description('Principal ID of the Foundry hosted agent\'s Entra Agent ID (scripts/deploy-hosted-agent.sh). Empty skips platform:hosted-agent.')
+param hostedAgentPrincipalId string = ''
+
 @description('Which customer account each user buys for, by Entra object ID: sample data for my-orders. The deployer gets Contoso.')
 param accountOwners object = {}
 
@@ -295,12 +298,14 @@ module teamAccess 'modules/team-access.bicep' = {
       'platform:apps': registry.outputs.identityPrincipalId
       'platform:returns-agent': registry.outputs.returnsIdentityPrincipalId
       'platform:foundry-project': foundryAgents.outputs.projectPrincipalId
+      'platform:hosted-agent': hostedAgentPrincipalId
     }
     platformPrincipalTypes: {
       'platform:deployer': principalType
       'platform:apps': 'ServicePrincipal'
       'platform:returns-agent': 'ServicePrincipal'
       'platform:foundry-project': 'ServicePrincipal'
+      'platform:hosted-agent': 'ServicePrincipal'
     }
     aliasNames: aliasNames
     toolNames: toolNames

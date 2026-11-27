@@ -148,5 +148,20 @@ else
   skip "pip install -r clients/foundry-agent/requirements.txt to run this check"
 fi
 
+echo "== Foundry hosted agent: its code on Foundry -> gateway (chat, commerce) as its own Entra Agent ID"
+if [[ "$INBOUND_MODE" == "private" ]]; then
+  skip "a Foundry hosted agent reaches the gateway's public endpoint (see README, Inbound modes)"
+elif [[ "$AS_DEVELOPER" != true ]] || ! command -v azd >/dev/null; then
+  skip "invoking the hosted agent needs azd and the developer's Foundry access"
+elif ! (cd agents/hosted-order-assistant && azd env select "${AZURE_RESOURCE_GROUP#rg-}" >/dev/null 2>&1); then
+  skip "the hosted agent isn't deployed from this machine (scripts/deploy-hosted-agent.sh)"
+else
+  out="$(cd agents/hosted-order-assistant && AZURE_DEV_USER_AGENT=microsoft_foundry_skill azd ai agent invoke \
+    hosted-order-assistant --new-conversation "What is the status of order 1001? Reply in one sentence." 2>&1)"
+  grep '^\[hosted-order-assistant\]' <<<"$out" | sed 's/^/    /'
+  if grep -qi "shipped" <<<"$out"; then check "hosted agent answered from the commerce tools" ok ok
+  else check "hosted agent answered from the commerce tools" failed ok; fi
+fi
+
 echo; echo "$PASS passed, $FAILED failed"
 [[ "$FAILED" == 0 ]]

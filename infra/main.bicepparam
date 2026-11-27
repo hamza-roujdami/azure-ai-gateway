@@ -35,5 +35,8 @@ param claudeIndustry = readEnvironmentVariable('CLAUDE_INDUSTRY', 'technology')
 param onBehalfOfBackendAppId = readEnvironmentVariable('ON_BEHALF_OF_BACKEND_APP_ID', '')
 param onBehalfOfTokenExchangeAppId = readEnvironmentVariable('ON_BEHALF_OF_TOKEN_EXCHANGE_APP_ID', '')
 
+// The Foundry hosted agent's Entra Agent ID, for platform:hosted-agent. scripts/deploy.sh sets it.
+param hostedAgentPrincipalId = readEnvironmentVariable('HOSTED_AGENT_PRINCIPAL_ID', '')
+
 // Who can call what: scripts/deploy.sh sets AI_GATEWAY_TEAMS from the files in teams/ (scripts/teams.py render).
 param teams = json(readEnvironmentVariable('AI_GATEWAY_TEAMS', '[]'))
